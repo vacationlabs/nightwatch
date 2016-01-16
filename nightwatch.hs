@@ -3,32 +3,57 @@
 import Control.Lens
 import Network.Wreq
 --import Data.ByteString.Lazy as BS (p)
-import Data.Aeson (FromJSON, ToJSON, decode, encode, Value)
+--import Data.Aeson (FromJSON, ToJSON, decode, encode, Value)
+import Data.Aeson
+import Data.Aeson.Types
 import GHC.Generics (Generic)
 --import Data.Map as Map
 import Control.Concurrent
 import Control.Monad (forever)
 import Control.Concurrent.Chan
+import Data.List (isPrefixOf, drop)
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
 apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
 
+
+removePrefix :: String -> String -> String
+removePrefix prefix input 
+  | isPrefixOf prefix input = drop (length prefix) input
+  | otherwise = input
+
 data User = User {
-  id :: Integer,
-  first_name :: [Char],
-  last_name :: Maybe [Char],
-  username :: Maybe [Char]
+  user_id :: Integer,
+  user_first_name :: String,
+  user_last_name :: Maybe String,
+  user_username :: Maybe String
 } deriving (Show, Generic)
 
-instance FromJSON User
 instance ToJSON User
+instance FromJSON User where
+  parseJSON = genericParseJSON defaultOptions {
+    fieldLabelModifier = removePrefix "user_"
+  }
+
+data Chat = Chat {
+  chat_id :: Integer
+  --username :: Maybe String,
+  --first_name :: Maybe String,
+  --last_name :: Maybe String
+} deriving (Show, Generic)
+
+instance ToJSON Chat
+instance FromJSON Chat where 
+  parseJSON = genericParseJSON defaultOptions {
+    fieldLabelModifier = removePrefix "chat_"
+  }
 
 data Message = Message {
   message_id :: Int,
   from :: User,
   date :: Integer,
-  --chat :: Chat,
+  chat :: Chat,
   text :: [Char],
   forward_from :: Maybe User,
   forward_date :: Maybe Integer,
@@ -60,6 +85,10 @@ getUpdates = do
 getUpdatesAsJSON = do
   asJSON =<< getUpdates :: IO Resp
 
+sendMessage update txt = do
+  let cid = chat_id $ chat $ message update
+  post (apiBaseUrl ++ "/sendMessage") [ "chat_id" := cid, "text" := txt ]
+
 -- TODO: There's probably a better way to do this
 --processUpdates :: [Integer] -> [Update] -> ([Integer], [Update])
 --processUpdates processedUpdateIds [] = (processedUpdateIds, [])
@@ -87,6 +116,7 @@ sendCannedResponse :: Chan Update -> IO ()
 sendCannedResponse replyChan = do
   update <- readChan replyChan
   putStrLn $ "Will send a canned response to " ++ (show update)
+  --sendMessage update "works"
   sendCannedResponse replyChan
 
 main = do 
