@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 import Control.Lens
 import Network.Wreq
+import Network.HTTP.Client(HttpException(..))
 --import Data.ByteString.Lazy as BS (p)
 --import Data.Aeson (FromJSON, ToJSON, decode, encode, Value)
 import Data.Aeson
@@ -9,10 +10,11 @@ import Data.Aeson.Types
 import GHC.Generics (Generic)
 --import Data.Map as Map
 import Control.Concurrent
-import Control.Monad (forever)
+import Control.Monad (forever, guard)
 import Control.Concurrent.Chan
 import Data.List (isPrefixOf, drop)
 import Data.Text (pack)
+import Control.Exception (catch, try, tryJust, bracketOnError)
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -117,7 +119,7 @@ sendCannedResponse :: Chan Update -> IO ()
 sendCannedResponse replyChan = do
   update <- readChan replyChan
   putStrLn $ "Will send a canned response to " ++ (show update)
-  sendMessage update "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come."
+  sendMessage update "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come." `catch` (\e -> do putStrLn (show e))
   sendCannedResponse replyChan
 
 main = do 
