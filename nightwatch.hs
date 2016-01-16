@@ -6,6 +6,7 @@ import Network.Wreq
 import Data.Aeson (FromJSON, ToJSON, decode, encode, Value)
 import GHC.Generics (Generic)
 import Data.Map as Map
+import Control.Concurrent
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -55,6 +56,9 @@ instance ToJSON TelegramResponse
 getUpdates = do
   get (apiBaseUrl ++ "/getUpdates")
 
+getUpdatesAsJSON = do
+  asJSON =<< getUpdates :: IO Resp
+
 processUpdates :: [Integer] -> [Update] -> [Integer]
 processUpdates processedUpdateIds [] = processedUpdateIds
 processUpdates processedUpdateIds all@(update:incomingUpdates)
@@ -62,7 +66,19 @@ processUpdates processedUpdateIds all@(update:incomingUpdates)
   | otherwise = processUpdates (updt_id:processedUpdateIds) incomingUpdates
   where updt_id = (update_id update)
 
-main = do 
+--main = do 
+--  r <- asJSON =<< getUpdates :: IO Resp
+--  let incomingUpdates = result $ r ^. responseBody
+--      processedUpdateIds = processUpdates processedUpdateIds incomingUpdates
+--  putStrLn $ show $ processUpdates processedUpdateIds incomingUpdates
+
+doPollLoop = do
   r <- asJSON =<< getUpdates :: IO Resp
-  let incomingUpdates = result $ r ^. responseBody
-  putStrLn $ show $ processUpdates processedUpdateIds incomingUpdates
+  putStrLn $ show $ r ^. responseBody 
+  threadDelay (10^6)
+  doPollLoop  
+
+main = do 
+  forkIO doPollLoop
+  getLine
+  putStrLn "exiting now"
