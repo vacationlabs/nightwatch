@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 import Control.Lens
 import Network.Wreq
-import Data.ByteString.Lazy as BS
+--import Data.ByteString.Lazy as BS (p)
 import Data.Aeson (FromJSON, ToJSON, decode, encode, Value)
 import GHC.Generics (Generic)
 import Data.Map as Map
@@ -55,12 +55,14 @@ instance ToJSON TelegramResponse
 getUpdates = do
   get (apiBaseUrl ++ "/getUpdates")
 
---processUpdates :: [a] -> [b] -> [a]
---processUpdates processedUpdateIds [] = processedUpdateIds
---processUpdates processedUpdateIds (update:incomingUpdates) = fmap
+processUpdates :: [Integer] -> [Update] -> [Integer]
+processUpdates processedUpdateIds [] = processedUpdateIds
+processUpdates processedUpdateIds all@(update:incomingUpdates)
+  | elem updt_id processedUpdateIds = processUpdates processedUpdateIds incomingUpdates
+  | otherwise = processUpdates (updt_id:processedUpdateIds) incomingUpdates
+  where updt_id = (update_id update)
 
 main = do 
-  --r <- getUpdates
-  --BS.putStr (r ^. responseBody)
   r <- asJSON =<< getUpdates :: IO Resp
-  Prelude.putStrLn (show r)
+  let incomingUpdates = result $ r ^. responseBody
+  putStrLn $ show $ processUpdates processedUpdateIds incomingUpdates
