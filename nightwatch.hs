@@ -7,11 +7,11 @@ import Data.Aeson (FromJSON, ToJSON, decode, encode, Value)
 import GHC.Generics (Generic)
 import Data.Map as Map
 import Control.Concurrent
+import Control.Monad (forever)
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
 apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
-processedUpdateIds = []
 
 data User = User {
   id :: Integer,
@@ -72,13 +72,13 @@ processUpdates processedUpdateIds all@(update:incomingUpdates)
 --      processedUpdateIds = processUpdates processedUpdateIds incomingUpdates
 --  putStrLn $ show $ processUpdates processedUpdateIds incomingUpdates
 
-doPollLoop = do
-  r <- asJSON =<< getUpdates :: IO Resp
-  putStrLn $ show $ r ^. responseBody 
+doPollLoop processedUpdateIds = do
   threadDelay (10^6)
-  doPollLoop  
+  r <- asJSON =<< getUpdates :: IO Resp
+  putStrLn $ "Alredy procssed " ++ (show processedUpdateIds)
+  doPollLoop (processUpdates processedUpdateIds (result $ r ^. responseBody))
 
 main = do 
-  forkIO doPollLoop
+  forkIO $ doPollLoop []
   getLine
   putStrLn "exiting now"
