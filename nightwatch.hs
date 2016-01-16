@@ -12,6 +12,7 @@ import Control.Concurrent
 import Control.Monad (forever)
 import Control.Concurrent.Chan
 import Data.List (isPrefixOf, drop)
+import Data.Text (pack)
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -54,7 +55,7 @@ data Message = Message {
   from :: User,
   date :: Integer,
   chat :: Chat,
-  text :: [Char],
+  text :: Maybe String,
   forward_from :: Maybe User,
   forward_date :: Maybe Integer,
   reply_to_message :: Maybe Message
@@ -87,7 +88,7 @@ getUpdatesAsJSON = do
 
 sendMessage update txt = do
   let cid = chat_id $ chat $ message update
-  post (apiBaseUrl ++ "/sendMessage") [ "chat_id" := cid, "text" := txt ]
+  post (apiBaseUrl ++ "/sendMessage") ["chat_id" := cid, "text" := (Data.Text.pack txt)]
 
 -- TODO: There's probably a better way to do this
 --processUpdates :: [Integer] -> [Update] -> ([Integer], [Update])
@@ -116,7 +117,7 @@ sendCannedResponse :: Chan Update -> IO ()
 sendCannedResponse replyChan = do
   update <- readChan replyChan
   putStrLn $ "Will send a canned response to " ++ (show update)
-  --sendMessage update "works"
+  sendMessage update "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come."
   sendCannedResponse replyChan
 
 main = do 
