@@ -119,7 +119,8 @@ sendCannedResponse :: Chan Update -> IO ()
 sendCannedResponse replyChan = do
   update <- readChan replyChan
   putStrLn $ "Will send a canned response to " ++ (show update)
-  sendMessage update "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come." `catch` (\e -> do putStrLn (show e))
+  --sendMessage update "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come." `catch` (\e -> do putStrLn (show e))
+  sendMessage update "test" `catch` print
   sendCannedResponse replyChan
 
 main = do 
