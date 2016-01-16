@@ -8,6 +8,7 @@ import GHC.Generics (Generic)
 --import Data.Map as Map
 import Control.Concurrent
 import Control.Monad (forever)
+import Control.Concurrent.Chan
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -73,15 +74,24 @@ getUpdatesAsJSON = do
 --      processedUpdateIds = processUpdates processedUpdateIds incomingUpdates
 --  putStrLn $ show $ processUpdates processedUpdateIds incomingUpdates
 
-doPollLoop processedUpdateIds = do
+doPollLoop replyChan processedUpdateIds = do
   threadDelay (10^6)
   r <- asJSON =<< getUpdates :: IO Resp
   let incomingUpdates = (result $ r ^. responseBody)
       updatesToProcess = filter (\update -> not $ elem (update_id update) processedUpdateIds) incomingUpdates
-  putStrLn $ "Will process now " ++ (show updatesToProcess)
-  doPollLoop $ (map update_id updatesToProcess) ++ processedUpdateIds
+  putStrLn $ "Will process " ++ (show updatesToProcess)
+  writeList2Chan replyChan updatesToProcess
+  doPollLoop replyChan $ (map update_id updatesToProcess) ++ processedUpdateIds
+
+sendCannedResponse :: Chan Update -> IO ()
+sendCannedResponse replyChan = do
+  update <- readChan replyChan
+  putStrLn $ "Will send a canned response to " ++ (show update)
+  sendCannedResponse replyChan
 
 main = do 
-  forkIO $ doPollLoop []
+  replyChan <- newChan
+  forkIO $ doPollLoop replyChan []
+  forkIO $ sendCannedResponse replyChan
   getLine
   putStrLn "exiting now"
