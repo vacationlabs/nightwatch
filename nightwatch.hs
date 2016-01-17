@@ -17,6 +17,9 @@ import Data.Text (pack)
 import Control.Exception (catch, try, tryJust, bracketOnError, SomeException)
 import Data.Functor (void)
 import Network.XmlRpc.Client
+import Data.Time
+import Data.Time.Clock.POSIX
+import Data.ByteString.Lazy.Internal (ByteString)
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -85,11 +88,14 @@ data TelegramResponse = TelegramResponse {
 instance FromJSON TelegramResponse
 instance ToJSON TelegramResponse
 
-getUpdates = do
-  get (apiBaseUrl ++ "/getUpdates")
+getUpdates :: (Num a, Show a) => Maybe a -> IO (Response Data.ByteString.Lazy.Internal.ByteString)
+getUpdates Nothing = getUpdates (Just 0)
+getUpdates (Just offset) = do
+  putStrLn (apiBaseUrl ++ "/getUpdates?offset=" ++ (show offset))
+  get (apiBaseUrl ++ "/getUpdates?offset=" ++ (show offset))
 
-getUpdatesAsJSON = do
-  asJSON =<< getUpdates :: IO Resp
+getUpdatesAsJSON offset = do
+  asJSON =<< (getUpdates offset) :: IO Resp
 
 sendMessage update txt = do
   let cid = chat_id $ chat $ message update
@@ -111,14 +117,17 @@ sendMessage update txt = do
 --      processedUpdateIds = processUpdates processedUpdateIds incomingUpdates
 --  putStrLn $ show $ processUpdates processedUpdateIds incomingUpdates
 
-doPollLoop replyChan processedUpdateIds = do
+
+findLastUpdateId :: Integer -> [Update] -> Integer
+findLastUpdateId lastUpdateId updates = foldl (\m update -> if (update_id update) > m then (update_id update) else m) lastUpdateId updates
+
+doPollLoop replyChan lastUpdateId = do
   threadDelay (10^6)
-  r <- asJSON =<< getUpdates :: IO Resp
+  r <- asJSON =<< (getUpdates (Just lastUpdateId)) :: IO Resp
   let incomingUpdates = (result $ r ^. responseBody)
-      updatesToProcess = filter (\update -> not $ elem (update_id update) processedUpdateIds) incomingUpdates
-  putStrLn $ "Will process " ++ (show updatesToProcess)
-  writeList2Chan replyChan updatesToProcess
-  doPollLoop replyChan $ (map update_id updatesToProcess) ++ processedUpdateIds
+  putStrLn $ "Will process " ++ (show incomingUpdates)
+  --writeList2Chan replyChan updatesToProcess
+  doPollLoop replyChan $ (findLastUpdateId lastUpdateId incomingUpdates)
 
 aria2AddUri :: String -> IO String
 aria2AddUri url = remote ariaRpcUrl "aria2.addUri" [url]
@@ -148,7 +157,7 @@ processIncomingMessages replyChan = do
 
 main = do 
   replyChan <- newChan
-  forkIO $ doPollLoop replyChan []
+  forkIO $ doPollLoop replyChan 103557872
   --forkIO $ sendCannedResponse replyChan
   forkIO $ processIncomingMessages replyChan
   getLine
