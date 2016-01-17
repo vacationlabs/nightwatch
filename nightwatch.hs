@@ -20,12 +20,25 @@ import Network.XmlRpc.Client
 import Data.Time
 import Data.Time.Clock.POSIX
 import Data.ByteString.Lazy.Internal (ByteString)
+import Text.Regex.Posix
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
 apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
 ariaRpcUrl = "http://localhost:9999/rpc"
 --ariaRpc = remote ariaRpcUrl
+
+data NightWatchCommand = InvalidCommand | DownloadCommand { url :: String } | PauseCommand { url :: String } | StatusCommand { url :: String } deriving (Show, Eq)
+
+fromString :: Maybe String -> NightWatchCommand
+fromString Nothing = InvalidCommand
+fromString (Just inp)
+  | length matches == 0 = InvalidCommand
+  | (head matches) == "download" = DownloadCommand (head $ tail matches)
+  | (head matches) == "pause" = PauseCommand (head $ tail matches)
+  | (head matches) == "status" = StatusCommand (head $ tail matches)
+  | otherwise = InvalidCommand
+  where (_, _, _, matches) = ((inp :: String) =~ ("^(download|pause|cancel|status)[ \t\r\n\v\f]+(.*)" :: String) :: (String, String, String, [String]))
 
 removePrefix :: String -> String -> String
 removePrefix prefix input 
@@ -119,6 +132,7 @@ sendMessage update txt = do
 
 
 findLastUpdateId :: Integer -> [Update] -> Integer
+findLastUpdateId lastUpdateId [] = lastUpdateId
 findLastUpdateId lastUpdateId updates = (1+) $ foldl (\m update -> if (update_id update) > m then (update_id update) else m) lastUpdateId updates
 
 doPollLoop replyChan lastUpdateId = do
@@ -126,25 +140,29 @@ doPollLoop replyChan lastUpdateId = do
   r <- asJSON =<< (getUpdates (Just lastUpdateId)) :: IO Resp
   let incomingUpdates = (result $ r ^. responseBody)
   putStrLn $ "Will process " ++ (show incomingUpdates)
-  --writeList2Chan replyChan updatesToProcess
+  writeList2Chan replyChan incomingUpdates
   doPollLoop replyChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
 
 aria2AddUri :: String -> IO String
 aria2AddUri url = remote ariaRpcUrl "aria2.addUri" [url]
 
-processIncomingMessage :: Message -> Either String (IO String)
-processIncomingMessage msg = do 
-  case (text msg) of 
-    Nothing -> Left "What language, dost thou speaketh?"
-    Just txt -> Right $ (aria2AddUri txt) `catch` (\e -> return ("THE GODS HAVE SPOKEN: " ++ (show (e :: Control.Exception.SomeException))))
+processIncomingMessage :: Message -> IO String
+processIncomingMessage msg = do
+  putStrLn $ show $ fromString $ text msg 
+  case fromString (text msg) of
+    (DownloadCommand url) -> aria2AddUri url
+    _ -> return "What language, dost thou speaketh? Command me with: download <url>"
+
+  --case (text msg) of 
+  --  Nothing -> Left "What language, dost thou speaketh?"
+  --  Just txt -> Right $ (aria2AddUri txt) `catch` (\e -> return ("THE GODS HAVE SPOKEN: " ++ (show (e :: Control.Exception.SomeException))))
 
 processIncomingMessages :: Chan Update -> IO ()
 processIncomingMessages replyChan = do
+  putStrLn "STARTING processIncomingMessages"
   update <- readChan replyChan
   putStrLn $ "RECEIVED: " ++ (show update)
-  case processIncomingMessage (message update) of 
-    Left x -> (sendMessage update x)
-    Right y -> sendMessage update =<< y
+  sendMessage update =<< (processIncomingMessage $ message update)
   processIncomingMessages replyChan
 
 --sendCannedResponse :: Chan Update -> IO ()
