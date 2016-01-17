@@ -119,7 +119,7 @@ sendMessage update txt = do
 
 
 findLastUpdateId :: Integer -> [Update] -> Integer
-findLastUpdateId lastUpdateId updates = foldl (\m update -> if (update_id update) > m then (update_id update) else m) lastUpdateId updates
+findLastUpdateId lastUpdateId updates = (1+) $ foldl (\m update -> if (update_id update) > m then (update_id update) else m) lastUpdateId updates
 
 doPollLoop replyChan lastUpdateId = do
   threadDelay (10^6)
@@ -127,7 +127,7 @@ doPollLoop replyChan lastUpdateId = do
   let incomingUpdates = (result $ r ^. responseBody)
   putStrLn $ "Will process " ++ (show incomingUpdates)
   --writeList2Chan replyChan updatesToProcess
-  doPollLoop replyChan $ (findLastUpdateId lastUpdateId incomingUpdates)
+  doPollLoop replyChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
 
 aria2AddUri :: String -> IO String
 aria2AddUri url = remote ariaRpcUrl "aria2.addUri" [url]
@@ -155,9 +155,20 @@ processIncomingMessages replyChan = do
 --  void (sendMessage update funkyMsg) `catch` (\e -> do putStrLn (show (e :: Control.Exception.SomeException)))
 --  sendCannedResponse replyChan
 
+setLastUpdateId updateId = do
+  writeFile "./last-update-id" (show updateId)
+  return updateId
+
+getLastUpdateId = do
+  x <- readFile "./last-update-id"
+  case (reads x :: [(Integer, String)]) of
+    [] -> return 0 -- Probably not a good idea
+    [(y, s)] -> return y
+
+
 main = do 
   replyChan <- newChan
-  forkIO $ doPollLoop replyChan 103557872
+  forkIO $ doPollLoop replyChan =<< getLastUpdateId
   --forkIO $ sendCannedResponse replyChan
   forkIO $ processIncomingMessages replyChan
   getLine
