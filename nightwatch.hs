@@ -10,17 +10,19 @@ import Data.Aeson.Types
 import GHC.Generics (Generic)
 --import Data.Map as Map
 import Control.Concurrent
-import Control.Monad (forever, guard)
+import Control.Monad (forever, guard, liftM)
 import Control.Concurrent.Chan
 import Data.List (isPrefixOf, drop)
 import Data.Text (pack)
 import Control.Exception (catch, try, tryJust, bracketOnError, SomeException)
 import Data.Functor (void)
+import Network.XmlRpc.Client
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
 apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
-
+ariaRpcUrl = "http://localhost:9999/rpc"
+--ariaRpc = remote ariaRpcUrl
 
 removePrefix :: String -> String -> String
 removePrefix prefix input 
@@ -91,7 +93,9 @@ getUpdatesAsJSON = do
 
 sendMessage update txt = do
   let cid = chat_id $ chat $ message update
-  post (apiBaseUrl ++ "/sendMessage") ["chat_id" := cid, "text" := (Data.Text.pack txt)]
+  do putStrLn $ "Sending to " ++ (show cid) ++ ": " ++ (show txt)
+  void (post (apiBaseUrl ++ "/sendMessage") ["chat_id" := cid, "text" := (Data.Text.pack txt)]) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show cid) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
+    
 
 -- TODO: There's probably a better way to do this
 --processUpdates :: [Integer] -> [Update] -> ([Integer], [Update])
@@ -116,18 +120,36 @@ doPollLoop replyChan processedUpdateIds = do
   writeList2Chan replyChan updatesToProcess
   doPollLoop replyChan $ (map update_id updatesToProcess) ++ processedUpdateIds
 
-sendCannedResponse :: Chan Update -> IO ()
-sendCannedResponse replyChan = do
+aria2AddUri :: String -> IO String
+aria2AddUri url = remote ariaRpcUrl "aria2.addUri" [url]
+
+processIncomingMessage :: Message -> Either String (IO String)
+processIncomingMessage msg = do 
+  case (text msg) of 
+    Nothing -> Left "What language, dost thou speaketh?"
+    Just txt -> Right $ (aria2AddUri txt) `catch` (\e -> return ("THE GODS HAVE SPOKEN: " ++ (show (e :: Control.Exception.SomeException))))
+
+processIncomingMessages :: Chan Update -> IO ()
+processIncomingMessages replyChan = do
   update <- readChan replyChan
-  putStrLn $ "=====> SENDING: " ++ (show update)
-  let funkyMsg = "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come."
-  --sendMessage update "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come." `catch` (\e -> do putStrLn (show e))
-  void (sendMessage update funkyMsg) `catch` (\e -> do putStrLn (show (e :: Control.Exception.SomeException)))
-  sendCannedResponse replyChan
+  putStrLn $ "RECEIVED: " ++ (show update)
+  case processIncomingMessage (message update) of 
+    Left x -> (sendMessage update x)
+    Right y -> sendMessage update =<< y
+  processIncomingMessages replyChan
+
+--sendCannedResponse :: Chan Update -> IO ()
+--sendCannedResponse replyChan = do
+--  update <- readChan replyChan
+--  putStrLn $ "=====> SENDING: " ++ (show update)
+--  let funkyMsg = "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come."
+--  void (sendMessage update funkyMsg) `catch` (\e -> do putStrLn (show (e :: Control.Exception.SomeException)))
+--  sendCannedResponse replyChan
 
 main = do 
   replyChan <- newChan
   forkIO $ doPollLoop replyChan []
-  forkIO $ sendCannedResponse replyChan
+  --forkIO $ sendCannedResponse replyChan
+  forkIO $ processIncomingMessages replyChan
   getLine
   putStrLn "exiting now"
