@@ -28,7 +28,7 @@ apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
 ariaRpcUrl = "http://localhost:9999/rpc"
 --ariaRpc = remote ariaRpcUrl
 
-data NightWatchCommand = InvalidCommand | DownloadCommand { url :: String } | PauseCommand { url :: String } | StatusCommand { url :: String } deriving (Show, Eq)
+data NightWatchCommand = InvalidCommand | DownloadCommand { url :: String } | PauseCommand { gid :: String } | UnpauseCommand { gid :: String } | StatusCommand { gid :: String } deriving (Show, Eq)
 
 fromString :: Maybe String -> NightWatchCommand
 fromString Nothing = InvalidCommand
@@ -36,6 +36,7 @@ fromString (Just inp)
   | length matches == 0 = InvalidCommand
   | (head matches) == "download" = DownloadCommand (head $ tail matches)
   | (head matches) == "pause" = PauseCommand (head $ tail matches)
+  | (head matches) == "unpause" = PauseCommand (head $ tail matches)
   | (head matches) == "status" = StatusCommand (head $ tail matches)
   | otherwise = InvalidCommand
   where (_, _, _, matches) = ((inp :: String) =~ ("^(download|pause|cancel|status)[ \t\r\n\v\f]+(.*)" :: String) :: (String, String, String, [String]))
@@ -146,11 +147,26 @@ doPollLoop replyChan lastUpdateId = do
 aria2AddUri :: String -> IO String
 aria2AddUri url = remote ariaRpcUrl "aria2.addUri" [url]
 
+aria2Pause :: String -> IO String
+aria2Pause gid = remote ariaRpcUrl "aria2.pause" gid
+
+aria2Unpause :: String -> IO String
+aria2Unpause gid = remote ariaRpcUrl "aria2.unpause" gid
+
+aria2TellStatus :: String -> IO [(String, String)]
+aria2TellStatus gid = remote ariaRpcUrl "aria2.tellStatus" gid
+
+aria2StatusToString :: [(String, String)] -> String
+aria2StatusToString aria2Status = foldl (\str term -> str ++ term ++ "\n") "" (map (\(key, val) -> (key ++ ": " ++ val)) aria2Status)
+
 processIncomingMessage :: Message -> IO String
 processIncomingMessage msg = do
   putStrLn $ show $ fromString $ text msg 
   case fromString (text msg) of
     (DownloadCommand url) -> aria2AddUri url `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
+    (PauseCommand gid) -> aria2Pause gid `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
+    (UnpauseCommand gid) -> aria2Unpause gid `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
+    (StatusCommand gid) -> fmap aria2StatusToString (aria2TellStatus gid) `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
     _ -> return "What language, dost thou speaketh? Command me with: download <url>"
 
   --case (text msg) of 
@@ -190,7 +206,7 @@ getLastUpdateId = do
 main = do 
   replyChan <- newChan
   forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
-  --forkIO $ sendCannedResponse replyChan
   forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
   getLine
   putStrLn "exiting now"
+
