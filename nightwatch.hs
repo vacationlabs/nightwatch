@@ -150,7 +150,7 @@ processIncomingMessage :: Message -> IO String
 processIncomingMessage msg = do
   putStrLn $ show $ fromString $ text msg 
   case fromString (text msg) of
-    (DownloadCommand url) -> aria2AddUri url
+    (DownloadCommand url) -> aria2AddUri url `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
     _ -> return "What language, dost thou speaketh? Command me with: download <url>"
 
   --case (text msg) of 
@@ -183,11 +183,14 @@ getLastUpdateId = do
     [] -> return 0 -- Probably not a good idea
     [(y, s)] -> return y
 
+--trapAllErrors errorFn fn = do
+--  void (fn) `catch` (\e -> errorFn (e :: Control.Exception.SomeException))
+--  trapAllErrors errorFn fn
 
 main = do 
   replyChan <- newChan
-  forkIO $ doPollLoop replyChan =<< getLastUpdateId
+  forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
   --forkIO $ sendCannedResponse replyChan
-  forkIO $ processIncomingMessages replyChan
+  forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
   getLine
   putStrLn "exiting now"
