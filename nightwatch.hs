@@ -21,6 +21,8 @@ import Data.Time
 import Data.Time.Clock.POSIX
 import Data.ByteString.Lazy.Internal (ByteString)
 import Text.Regex.Posix
+import GHC.Exception
+-- import System.Posix.Signals (scheduleAlarm, awaitSignal, emptySignalSet, addSignal, sigALRM, realTimeAlarm, fullSignalSet)
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -193,6 +195,13 @@ setLastUpdateId updateId = do
   writeFile "./last-update-id" (show updateId)
   return updateId
 
+readIntegralFromFile :: (GHC.Exception.Exception e) => String -> IO (Either e Integer)
+readIntegralFromFile fname = do
+  x <- try (readFile fname)
+  case x of
+    (Left e) -> return (Left e)
+    (Right i) -> try (return (read i :: Integer))
+
 getLastUpdateId = do
   x <- readFile "./last-update-id"
   case (reads x :: [(Integer, String)]) of
@@ -203,10 +212,29 @@ getLastUpdateId = do
 --  void (fn) `catch` (\e -> errorFn (e :: Control.Exception.SomeException))
 --  trapAllErrors errorFn fn
 
+
+getAria2Pid = readIntegralFromFile "./aria2.pid"
+
+startAria2 = do
+  putStrLn "Would've forked an aria2 process and stored the PID in the text file"
+
+checkAria2Running = do
+  putStrLn "Would've checked if the PID was still running"
+
+aria2Heartbeat = do
+  pid <- getAria2Pid
+  case pid of
+    (Left e) -> startAria2
+    (Right p) -> checkAria2Running
+  putStrLn "sleeping for 5 sec"
+  threadDelay(5*(10^6))
+  putStrLn "wake-up mofo!"
+
 main = do 
   replyChan <- newChan
+  forkIO $ forever $ aria2Heartbeat
   forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
-  forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
+  -- forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
   getLine
   putStrLn "exiting now"
 
