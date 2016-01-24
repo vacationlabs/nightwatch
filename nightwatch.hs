@@ -33,6 +33,8 @@ apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
 ariaRpcUrl = "http://localhost:9999/rpc"
 --ariaRpc = remote ariaRpcUrl
 
+data PIDFileError = PIDFileNotFoundError | PIDFileParseError
+
 data NightWatchCommand = InvalidCommand | DownloadCommand { url :: String } | PauseCommand { gid :: String } | UnpauseCommand { gid :: String } | StatusCommand { gid :: String } deriving (Show, Eq)
 
 fromString :: Maybe String -> NightWatchCommand
@@ -206,10 +208,10 @@ setLastUpdateId updateId = do
 --     (Right i) -> try (return (read i :: Integer))
 
 
-readIntegralFromFile :: String -> IO (Either IOError (Maybe Integer))
+readIntegralFromFile :: String -> IO (Either PIDFileError Integer)
 readIntegralFromFile fname = do
-  runEitherT $ fmap readMaybe $ EitherT $ tryJust (\e -> if isDoesNotExistError e then (Just e) else Nothing) $ readFile fname
-
+   fmap (fmap read) (tryJust (\e -> if isDoesNotExistError e then (Just PIDFileNotFoundError) else Nothing) $ readFile fname)
+  
 
 
 getLastUpdateId = do
