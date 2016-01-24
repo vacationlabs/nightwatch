@@ -1,8 +1,9 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot) where
 import Control.Lens
 import Network.Wreq
-import Network.HTTP.Client(HttpException(..))
+-- import Network.HTTP.Client(HttpException(..))
 --import Data.ByteString.Lazy as BS (p)
 --import Data.Aeson (FromJSON, ToJSON, decode, encode, Value)
 import Data.Aeson
@@ -33,10 +34,6 @@ ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/rpc"
 aria2Command = "./aria2-1.19.3/bin/aria2c"
 aria2DownloadDir = "./downloads"
 aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
-
---ariaRpc = remote ariaRpcUrl
-
-data PIDFileError = PIDFileNotFoundError | PIDFileParseError
 
 data NightWatchCommand = InvalidCommand | DownloadCommand { url :: String } | PauseCommand { gid :: String } | UnpauseCommand { gid :: String } | StatusCommand { gid :: String } deriving (Show, Eq)
 
@@ -221,29 +218,22 @@ getLastUpdateId = do
     [] -> return 0 -- Probably not a good idea
     [(y, s)] -> return y
 
-startAria2 = do
+startAria2_ = do
   putStrLn "==> Starting Aria2"
   (_, _, _, processHandle) <- createProcess (proc aria2Command aria2Args)
   return processHandle
 
-checkAria2Running = do
-  putStrLn "Would've checked if the PID was still running"
-
 ensureAria2Running :: IO a
 ensureAria2Running = do
-  ph <- startAria2
+  ph <- startAria2_
   exitCode <- waitForProcess ph
   putStrLn $ "ERROR: Aria2 process died mysteriously: " ++ (show exitCode)
   ensureAria2Running
 
-main = do 
+startTelegramBot = do
   replyChan <- newChan
   forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
-  forkIO $ forever $ ensureAria2Running
   forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
-  getLine
-  putStrLn "exiting now"
 
-
--- main = do
---   readIntegralFromFile "/tmp/a"
+startAria2 = do
+  forkIO $ forever $ ensureAria2Running
