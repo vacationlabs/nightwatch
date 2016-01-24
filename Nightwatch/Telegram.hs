@@ -3,13 +3,9 @@
 module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot) where
 import Control.Lens
 import Network.Wreq
--- import Network.HTTP.Client(HttpException(..))
---import Data.ByteString.Lazy as BS (p)
---import Data.Aeson (FromJSON, ToJSON, decode, encode, Value)
 import Data.Aeson
 import Data.Aeson.Types
 import GHC.Generics (Generic)
---import Data.Map as Map
 import Control.Concurrent
 import Control.Monad (forever, guard, liftM)
 import Control.Concurrent.Chan
@@ -199,18 +195,6 @@ processIncomingMessages replyChan = do
 setLastUpdateId updateId = do
   writeFile "./last-update-id" (show updateId)
   return updateId
-
-readPIDFromFile :: String -> IO (Either PIDFileError Integer)
-readPIDFromFile fname = do
-  x <- (tryJust (\e -> if isDoesNotExistError e then (Just PIDFileNotFoundError) else Nothing) $ fmap readMaybe (readFile fname))
-  return $ case x of
-    (Left e) -> Left e
-    (Right Nothing) -> Left PIDFileParseError
-    (Right (Just y)) -> Right y
-
-
--- fmap (fmap parsePIDFile) (tryJust (\e -> if isDoesNotExistError e then (Just PIDFileNotFoundError) else Nothing) $ readFile fname)
--- IO (Either PIDFileEror String)
 
 getLastUpdateId = do
   x <- readFile "./last-update-id"
