@@ -172,10 +172,6 @@ processIncomingMessage msg = do
     (StatusCommand gid) -> fmap aria2StatusToString (aria2TellStatus gid) `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
     _ -> return "What language, dost thou speaketh? Command me with: download <url>"
 
-  --case (text msg) of 
-  --  Nothing -> Left "What language, dost thou speaketh?"
-  --  Just txt -> Right $ (aria2AddUri txt) `catch` (\e -> return ("THE GODS HAVE SPOKEN: " ++ (show (e :: Control.Exception.SomeException))))
-
 processIncomingMessages :: Chan Update -> IO ()
 processIncomingMessages replyChan = do
   putStrLn "STARTING processIncomingMessages"
