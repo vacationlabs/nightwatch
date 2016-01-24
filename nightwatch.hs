@@ -24,9 +24,6 @@ import Text.Regex.Posix
 import System.IO.Error
 import Text.Read (readMaybe)
 import System.Process (proc, createProcess, getProcessExitCode, ProcessHandle, waitForProcess)
-import System.Process.Internals (ProcessHandle__(..), withProcessHandle)
--- import GHC.Exception
--- import System.Posix.Signals (scheduleAlarm, awaitSignal, emptySignalSet, addSignal, sigALRM, realTimeAlarm, fullSignalSet)
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -223,22 +220,6 @@ getLastUpdateId = do
   case (reads x :: [(Integer, String)]) of
     [] -> return 0 -- Probably not a good idea
     [(y, s)] -> return y
-
---trapAllErrors errorFn fn = do
---  void (fn) `catch` (\e -> errorFn (e :: Control.Exception.SomeException))
---  trapAllErrors errorFn fn
-
-
-getAria2Pid = readPIDFromFile "./aria2.pid"
-
-setAria2Pid pid = do 
-  writeFile "./aria2.pid" (show pid)
-
-getPidFromProcessHandle ph = withProcessHandle ph extractPid
-  where 
-    extractPid ph_ = case ph_ of
-      (OpenHandle x) -> return x
-      (ClosedHandle _) -> return 0
 
 startAria2 = do
   putStrLn "==> Starting Aria2"
