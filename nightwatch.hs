@@ -22,15 +22,20 @@ import Data.Time.Clock.POSIX
 import Data.ByteString.Lazy.Internal (ByteString)
 import Text.Regex.Posix
 import System.IO.Error
-import Control.Monad.Trans.Either
 import Text.Read (readMaybe)
+import System.Process (proc, createProcess)
+import System.Process.Internals (ProcessHandle__(..), withProcessHandle)
 -- import GHC.Exception
 -- import System.Posix.Signals (scheduleAlarm, awaitSignal, emptySignalSet, addSignal, sigALRM, realTimeAlarm, fullSignalSet)
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
 apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
-ariaRpcUrl = "http://localhost:9999/rpc"
+ariaRPCPort = 9999
+ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/rpc"
+aria2Command = "./aria2-1.19.3/bin/aria2c"
+aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false"]
+
 --ariaRpc = remote ariaRpcUrl
 
 data PIDFileError = PIDFileNotFoundError | PIDFileParseError
@@ -152,16 +157,16 @@ doPollLoop replyChan lastUpdateId = do
   doPollLoop replyChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
 
 aria2AddUri :: String -> IO String
-aria2AddUri url = remote ariaRpcUrl "aria2.addUri" [url]
+aria2AddUri url = remote ariaRPCUrl "aria2.addUri" [url]
 
 aria2Pause :: String -> IO String
-aria2Pause gid = remote ariaRpcUrl "aria2.pause" gid
+aria2Pause gid = remote ariaRPCUrl "aria2.pause" gid
 
 aria2Unpause :: String -> IO String
-aria2Unpause gid = remote ariaRpcUrl "aria2.unpause" gid
+aria2Unpause gid = remote ariaRPCUrl "aria2.unpause" gid
 
 aria2TellStatus :: String -> IO [(String, String)]
-aria2TellStatus gid = remote ariaRpcUrl "aria2.tellStatus" gid
+aria2TellStatus gid = remote ariaRPCUrl "aria2.tellStatus" gid
 
 aria2StatusToString :: [(String, String)] -> String
 aria2StatusToString aria2Status = foldl (\str term -> str ++ term ++ "\n") "" (map (\(key, val) -> (key ++ ": " ++ val)) aria2Status)
@@ -225,8 +230,24 @@ getLastUpdateId = do
 
 getAria2Pid = readPIDFromFile "./aria2.pid"
 
+setAria2Pid pid = do 
+  writeFile "./aria2.pid" (show pid)
+
+getPidFromProcessHandle ph = withProcessHandle ph extractPid
+  where 
+    extractPid ph_ = case ph_ of
+      (OpenHandle x) -> return x
+      (ClosedHandle _) -> return 0
+
 startAria2 = do
-  putStrLn "Would've forked an aria2 process and stored the PID in the text file"
+  putStrLn "Starting Aria2..."
+  (_, _, _, processHandle) <- createProcess (proc aria2Command aria2Args)
+  pid <- (getPidFromProcessHandle processHandle)
+  setAria2Pid pid
+  putStrLn "Started aria2 PID = " 
+  print pid
+
+
 
 checkAria2Running = do
   putStrLn "Would've checked if the PID was still running"
