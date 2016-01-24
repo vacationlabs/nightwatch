@@ -1,7 +1,7 @@
 import Nightwatch.Telegram
+import Nightwatch.Webapp
 
 main = do 
   startTelegramBot
   startAria2
-  getLine
-  putStrLn "exiting now"
+  startWebapp
