@@ -200,19 +200,17 @@ setLastUpdateId updateId = do
   writeFile "./last-update-id" (show updateId)
   return updateId
 
--- readIntegralFromFile :: String -> IO (Either SomeException Integer)
--- readIntegralFromFile fname = do
---   x <- try (readFile fname)
---   case x of
---     (Left e) -> return (Left e)
---     (Right i) -> try (return (read i :: Integer))
+readPIDFromFile :: String -> IO (Either PIDFileError Integer)
+readPIDFromFile fname = do
+  x <- (tryJust (\e -> if isDoesNotExistError e then (Just PIDFileNotFoundError) else Nothing) $ fmap readMaybe (readFile fname))
+  return $ case x of
+    (Left e) -> Left e
+    (Right Nothing) -> Left PIDFileParseError
+    (Right (Just y)) -> Right y
 
 
-readIntegralFromFile :: String -> IO (Either PIDFileError Integer)
-readIntegralFromFile fname = do
-   fmap (fmap read) (tryJust (\e -> if isDoesNotExistError e then (Just PIDFileNotFoundError) else Nothing) $ readFile fname)
-  
-
+-- fmap (fmap parsePIDFile) (tryJust (\e -> if isDoesNotExistError e then (Just PIDFileNotFoundError) else Nothing) $ readFile fname)
+-- IO (Either PIDFileEror String)
 
 getLastUpdateId = do
   x <- readFile "./last-update-id"
@@ -225,7 +223,7 @@ getLastUpdateId = do
 --  trapAllErrors errorFn fn
 
 
-getAria2Pid = readIntegralFromFile "./aria2.pid"
+getAria2Pid = readPIDFromFile "./aria2.pid"
 
 startAria2 = do
   putStrLn "Would've forked an aria2 process and stored the PID in the text file"
