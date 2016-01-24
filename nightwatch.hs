@@ -23,7 +23,7 @@ import Data.ByteString.Lazy.Internal (ByteString)
 import Text.Regex.Posix
 import System.IO.Error
 import Text.Read (readMaybe)
-import System.Process (proc, createProcess)
+import System.Process (proc, createProcess, getProcessExitCode, ProcessHandle, waitForProcess)
 import System.Process.Internals (ProcessHandle__(..), withProcessHandle)
 -- import GHC.Exception
 -- import System.Posix.Signals (scheduleAlarm, awaitSignal, emptySignalSet, addSignal, sigALRM, realTimeAlarm, fullSignalSet)
@@ -240,31 +240,24 @@ getPidFromProcessHandle ph = withProcessHandle ph extractPid
       (ClosedHandle _) -> return 0
 
 startAria2 = do
-  putStrLn "Starting Aria2..."
+  putStrLn "==> Starting Aria2"
   (_, _, _, processHandle) <- createProcess (proc aria2Command aria2Args)
-  pid <- (getPidFromProcessHandle processHandle)
-  setAria2Pid pid
-  putStrLn "Started aria2 PID = " 
-  print pid
-
-
+  return processHandle
 
 checkAria2Running = do
   putStrLn "Would've checked if the PID was still running"
 
-aria2Heartbeat = do
-  pid <- getAria2Pid
-  case pid of
-    (Left e) -> startAria2
-    (Right p) -> checkAria2Running
-  putStrLn "sleeping for 5 sec"
-  threadDelay(5*(10^6))
-  putStrLn "wake-up mofo!"
+ensureAria2Running :: IO a
+ensureAria2Running = do
+  ph <- startAria2
+  exitCode <- waitForProcess ph
+  putStrLn $ "ERROR: Aria2 process died mysteriously: " ++ (show exitCode)
+  ensureAria2Running
 
 main = do 
   replyChan <- newChan
-  forkIO $ forever $ aria2Heartbeat
   forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
+  forkIO $ forever $ ensureAria2Running
   -- forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
   getLine
   putStrLn "exiting now"
