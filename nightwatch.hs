@@ -14,14 +14,17 @@ import Control.Monad (forever, guard, liftM)
 import Control.Concurrent.Chan
 import Data.List (isPrefixOf, drop)
 import Data.Text (pack)
-import Control.Exception (catch, try, tryJust, bracketOnError, SomeException)
+import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 import Data.Functor (void)
 import Network.XmlRpc.Client
 import Data.Time
 import Data.Time.Clock.POSIX
 import Data.ByteString.Lazy.Internal (ByteString)
 import Text.Regex.Posix
-import GHC.Exception
+import System.IO.Error
+import Control.Monad.Trans.Either
+import Text.Read (readMaybe)
+-- import GHC.Exception
 -- import System.Posix.Signals (scheduleAlarm, awaitSignal, emptySignalSet, addSignal, sigALRM, realTimeAlarm, fullSignalSet)
 type Resp = Response TelegramResponse
 
@@ -195,12 +198,19 @@ setLastUpdateId updateId = do
   writeFile "./last-update-id" (show updateId)
   return updateId
 
-readIntegralFromFile :: (GHC.Exception.Exception e) => String -> IO (Either e Integer)
+-- readIntegralFromFile :: String -> IO (Either SomeException Integer)
+-- readIntegralFromFile fname = do
+--   x <- try (readFile fname)
+--   case x of
+--     (Left e) -> return (Left e)
+--     (Right i) -> try (return (read i :: Integer))
+
+
+readIntegralFromFile :: String -> IO (Either IOError (Maybe Integer))
 readIntegralFromFile fname = do
-  x <- try (readFile fname)
-  case x of
-    (Left e) -> return (Left e)
-    (Right i) -> try (return (read i :: Integer))
+  runEitherT $ fmap readMaybe $ EitherT $ tryJust (\e -> if isDoesNotExistError e then (Just e) else Nothing) $ readFile fname
+
+
 
 getLastUpdateId = do
   x <- readFile "./last-update-id"
@@ -238,3 +248,6 @@ main = do
   getLine
   putStrLn "exiting now"
 
+
+-- main = do
+--   readIntegralFromFile "/tmp/a"
