@@ -34,7 +34,8 @@ apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
 ariaRPCPort = 9999
 ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/rpc"
 aria2Command = "./aria2-1.19.3/bin/aria2c"
-aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false"]
+aria2DownloadDir = "./downloads"
+aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
 
 --ariaRpc = remote ariaRpcUrl
 
@@ -258,7 +259,7 @@ main = do
   replyChan <- newChan
   forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
   forkIO $ forever $ ensureAria2Running
-  -- forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
+  forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
   getLine
   putStrLn "exiting now"
 
