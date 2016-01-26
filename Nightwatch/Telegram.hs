@@ -10,7 +10,7 @@ import Control.Concurrent
 import Control.Monad (forever, guard, liftM)
 import Control.Concurrent.Chan
 import Data.List (isPrefixOf, drop)
-import Data.Text (pack)
+import Data.Text (Text, pack)
 import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 import Data.Functor (void)
 import Network.XmlRpc.Client
@@ -21,6 +21,11 @@ import Text.Regex.Posix
 import System.IO.Error
 import Text.Read (readMaybe)
 import System.Process (proc, createProcess, getProcessExitCode, ProcessHandle, waitForProcess)
+import qualified Network.WebSockets  as WS
+import qualified Data.Text           as T
+import qualified Data.Text.IO        as T
+import qualified Control.Concurrent.Async as A
+
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -31,11 +36,17 @@ aria2Command = "./aria2-1.19.3/bin/aria2c"
 aria2DownloadDir = "./downloads"
 aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
 
-data NightWatchCommand = InvalidCommand | DownloadCommand { url :: String } | PauseCommand { gid :: String } | UnpauseCommand { gid :: String } | StatusCommand { gid :: String } deriving (Show, Eq)
 
-fromString :: Maybe String -> NightWatchCommand
-fromString Nothing = InvalidCommand
-fromString (Just inp)
+newtype VLUser = VLUser Integer deriving (Show, Eq)
+data NightWatchCommand = InvalidCommand | DownloadCommand { url :: String } | PauseCommand { gid :: String } | UnpauseCommand { gid :: String } | StatusCommand { gid :: String } deriving (Show, Eq)
+data AuthNightwatchCommand = UnauthenticatedCommand | AuthNightwatchCommand {
+  command :: NightWatchCommand,
+  user :: VLUser
+} deriving (Show, Eq)
+
+fromIncomingMessage_ :: Maybe String -> NightWatchCommand
+fromIncomingMessage_ Nothing = InvalidCommand
+fromIncomingMessage_ (Just inp)
   | length matches == 0 = InvalidCommand
   | (head matches) == "download" = DownloadCommand (head $ tail matches)
   | (head matches) == "pause" = PauseCommand (head $ tail matches)
@@ -43,6 +54,11 @@ fromString (Just inp)
   | (head matches) == "status" = StatusCommand (head $ tail matches)
   | otherwise = InvalidCommand
   where (_, _, _, matches) = ((inp :: String) =~ ("^(download|pause|cancel|status)[ \t\r\n\v\f]+(.*)" :: String) :: (String, String, String, [String]))
+
+-- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
+-- authenticated in the past
+fromIncomingMessage :: Message -> IO (AuthNightwatchCommand)
+fromIncomingMessage msg = return $ AuthNightwatchCommand {command=(fromIncomingMessage_ $ text msg), user =(VLUser 1)}
 
 removePrefix :: String -> String -> String
 removePrefix prefix input 
@@ -164,8 +180,9 @@ aria2StatusToString aria2Status = foldl (\str term -> str ++ term ++ "\n") "" (m
 
 processIncomingMessage :: Message -> IO String
 processIncomingMessage msg = do
-  putStrLn $ show $ fromString $ text msg 
-  case fromString (text msg) of
+  x <- fromIncomingMessage msg
+  putStrLn (show x)
+  case (command x) of
     (DownloadCommand url) -> aria2AddUri url `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
     (PauseCommand gid) -> aria2Pause gid `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
     (UnpauseCommand gid) -> aria2Unpause gid `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
@@ -213,7 +230,30 @@ ensureAria2Running = do
 startTelegramBot = do
   replyChan <- newChan
   forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
-  forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
+  -- putStrLn "Waiting 5 sec for Aria2 to start before starting websocket client..."
+  -- threadDelay(5*(10^6))
+  forkIO $ forever $ (WS.runClient "localhost" 9999 "/jsonrpc" aria2WebsocketClient) `catch` (\e -> putStrLn $ "ERROR IN websocket client: " ++ (show (e :: Control.Exception.SomeException)))
+
+  -- forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
 
 startAria2 = do
   forkIO $ forever $ ensureAria2Running
+
+aria2WebsocketReceiver :: WS.Connection -> IO ()
+aria2WebsocketReceiver conn = do
+  msg <- WS.receiveData conn
+  T.putStrLn msg
+  aria2WebsocketReceiver conn
+
+aria2WebsocketSender :: WS.Connection -> Int -> IO ()
+aria2WebsocketSender conn i = do
+  WS.sendTextData conn (T.pack $ "test" ++ (show i))
+  threadDelay (2*(10^6))
+  aria2WebsocketSender conn (i + 1)
+
+aria2WebsocketClient :: WS.ClientApp ()
+aria2WebsocketClient conn = do
+  a1 <- A.async (aria2WebsocketReceiver conn)
+  a2 <- A.async (aria2WebsocketSender conn 0)
+  A.waitAnyCancel [a1, a2]
+  return ()
