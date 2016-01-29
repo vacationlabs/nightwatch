@@ -25,6 +25,7 @@ import qualified Network.WebSockets  as WS
 import qualified Data.Text           as T
 import qualified Data.Text.IO        as T
 import qualified Control.Concurrent.Async as A
+import qualified Data.Map as M
 
 type Resp = Response TelegramResponse
 
@@ -230,11 +231,19 @@ ensureAria2Running = do
 startTelegramBot = do
   replyChan <- newChan
   forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
-  -- putStrLn "Waiting 5 sec for Aria2 to start before starting websocket client..."
-  -- threadDelay(5*(10^6))
   forkIO $ forever $ (WS.runClient "localhost" 9999 "/jsonrpc" aria2WebsocketClient) `catch` (\e -> putStrLn $ "ERROR IN websocket client: " ++ (show (e :: Control.Exception.SomeException)))
 
   -- forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
+
+data VersionResponse = VersionResponse {
+  version :: String,
+  enabledFeatures :: [String]
+} deriving (Show)
+
+instance FromJSON VersionResponse where
+  parseJSON (Object v) = VersionResponse <$>
+                         v .: "version" <*>
+                         v .: "enabledFeatures"
 
 startAria2 = do
   forkIO $ forever $ ensureAria2Running
@@ -242,12 +251,16 @@ startAria2 = do
 aria2WebsocketReceiver :: WS.Connection -> IO ()
 aria2WebsocketReceiver conn = do
   msg <- WS.receiveData conn
-  T.putStrLn msg
+  let v = do res <- decode msg
+             flip parseMaybe res $ \o -> do
+                                         r <- o .: "result"
+                                         return $ "result=" ++ (show (r :: VersionResponse))
+  putStrLn (show v)
   aria2WebsocketReceiver conn
 
 aria2WebsocketSender :: WS.Connection -> Int -> IO ()
 aria2WebsocketSender conn i = do
-  WS.sendTextData conn (T.pack $ "test" ++ (show i))
+  WS.sendTextData conn (T.pack $ "{\"jsonrpc\":\"2.0\", \"method\":\"aria2.getVersion\", \"id\":\"1\"}")
   threadDelay (2*(10^6))
   aria2WebsocketSender conn (i + 1)
 
