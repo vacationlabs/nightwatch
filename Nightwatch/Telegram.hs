@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot) where
+module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..), AuthNightwatchCommand(..)) where
 import Control.Lens
 import Network.Wreq
 import Data.Aeson
@@ -26,6 +26,8 @@ import qualified Data.Text           as T
 import qualified Data.Text.IO        as T
 import qualified Control.Concurrent.Async as A
 import qualified Data.Map as M
+import Nightwatch.Types hiding (chat_id, message)
+import qualified Nightwatch.Types as NT (chat_id, message)
 
 type Resp = Response TelegramResponse
 
@@ -38,16 +40,9 @@ aria2DownloadDir = "./downloads"
 aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
 
 
-newtype VLUser = VLUser Integer deriving (Show, Eq)
-data NightWatchCommand = InvalidCommand | DownloadCommand { url :: String } | PauseCommand { gid :: String } | UnpauseCommand { gid :: String } | StatusCommand { gid :: String } deriving (Show, Eq)
-data AuthNightwatchCommand = UnauthenticatedCommand | AuthNightwatchCommand {
-  command :: NightWatchCommand,
-  user :: VLUser
-} deriving (Show, Eq)
-
-fromIncomingMessage_ :: Maybe String -> NightWatchCommand
-fromIncomingMessage_ Nothing = InvalidCommand
-fromIncomingMessage_ (Just inp)
+parseIncomingMessage :: Maybe String -> NightwatchCommand
+parseIncomingMessage Nothing = InvalidCommand
+parseIncomingMessage (Just inp)
   | length matches == 0 = InvalidCommand
   | (head matches) == "download" = DownloadCommand (head $ tail matches)
   | (head matches) == "pause" = PauseCommand (head $ tail matches)
@@ -58,8 +53,8 @@ fromIncomingMessage_ (Just inp)
 
 -- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
 -- authenticated in the past
-fromIncomingMessage :: Message -> IO (AuthNightwatchCommand)
-fromIncomingMessage msg = return $ AuthNightwatchCommand {command=(fromIncomingMessage_ $ text msg), user =(VLUser 1)}
+authenticateCommand :: Message -> IO (AuthNightwatchCommand)
+authenticateCommand msg = return $ AuthNightwatchCommand {command=(parseIncomingMessage $ text msg), user=(VLUser 1), NT.chat_id=(chat_id $ chat $ msg)}
 
 removePrefix :: String -> String -> String
 removePrefix prefix input 
@@ -131,10 +126,10 @@ getUpdates (Just offset) = do
 getUpdatesAsJSON offset = do
   asJSON =<< (getUpdates offset) :: IO Resp
 
-sendMessage update txt = do
-  let cid = chat_id $ chat $ message update
-  do putStrLn $ "Sending to " ++ (show cid) ++ ": " ++ (show txt)
-  void (post (apiBaseUrl ++ "/sendMessage") ["chat_id" := cid, "text" := (Data.Text.pack txt)]) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show cid) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
+sendMessage :: TelegramOutgoingMessage -> IO ()
+sendMessage tgMsg = do
+  putStrLn $ "Sending to " ++ (show tgMsg)
+  void (post (apiBaseUrl ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (NT.message tgMsg)]) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
     
 
 -- TODO: There's probably a better way to do this
@@ -156,55 +151,32 @@ findLastUpdateId :: Integer -> [Update] -> Integer
 findLastUpdateId lastUpdateId [] = lastUpdateId
 findLastUpdateId lastUpdateId updates = (1+) $ foldl (\m update -> if (update_id update) > m then (update_id update) else m) lastUpdateId updates
 
-doPollLoop replyChan lastUpdateId = do
+doPollLoop tgIncomingChan lastUpdateId = do
   threadDelay (10^6)
   r <- asJSON =<< (getUpdates (Just lastUpdateId)) :: IO Resp
   let incomingUpdates = (result $ r ^. responseBody)
   putStrLn $ "Will process " ++ (show incomingUpdates)
-  writeList2Chan replyChan incomingUpdates
-  doPollLoop replyChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
+  writeList2Chan tgIncomingChan incomingUpdates
+  doPollLoop tgIncomingChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
 
-aria2AddUri :: String -> IO String
-aria2AddUri url = remote ariaRPCUrl "aria2.addUri" [url]
-
-aria2Pause :: String -> IO String
-aria2Pause gid = remote ariaRPCUrl "aria2.pause" gid
-
-aria2Unpause :: String -> IO String
-aria2Unpause gid = remote ariaRPCUrl "aria2.unpause" gid
-
-aria2TellStatus :: String -> IO [(String, String)]
-aria2TellStatus gid = remote ariaRPCUrl "aria2.tellStatus" gid
-
-aria2StatusToString :: [(String, String)] -> String
-aria2StatusToString aria2Status = foldl (\str term -> str ++ term ++ "\n") "" (map (\(key, val) -> (key ++ ": " ++ val)) aria2Status)
-
-processIncomingMessage :: Message -> IO String
-processIncomingMessage msg = do
-  x <- fromIncomingMessage msg
-  putStrLn (show x)
-  case (command x) of
-    (DownloadCommand url) -> aria2AddUri url `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
-    (PauseCommand gid) -> aria2Pause gid `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
-    (UnpauseCommand gid) -> aria2Unpause gid `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
-    (StatusCommand gid) -> fmap aria2StatusToString (aria2TellStatus gid) `catch` (\e -> return ("The Gods are angry. You must please them ==> " ++ (show (e :: Control.Exception.SomeException))))
-    _ -> return "What language, dost thou speaketh? Command me with: download <url>"
-
-processIncomingMessages :: Chan Update -> IO ()
-processIncomingMessages replyChan = do
+processIncomingMessages :: Chan Update -> Aria2Channel -> IO ()
+processIncomingMessages tgIncomingChan aria2Chan = do
   putStrLn "STARTING processIncomingMessages"
-  update <- readChan replyChan
-  putStrLn $ "RECEIVED: " ++ (show update)
-  sendMessage update =<< (processIncomingMessage $ message update)
-  processIncomingMessages replyChan
+  update <- readChan tgIncomingChan
+  nwCommand <- authenticateCommand $ message update
+  putStrLn $ "nwCommand received: " ++ (show nwCommand)
+  case (command nwCommand) of
+    (DownloadCommand url) -> writeChan aria2Chan (Right nwCommand)
+    _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), NT.message="What language, dost thou speaketh? Command me with: download <url>"} 
+  processIncomingMessages tgIncomingChan aria2Chan
 
 --sendCannedResponse :: Chan Update -> IO ()
---sendCannedResponse replyChan = do
---  update <- readChan replyChan
+--sendCannedResponse tgIncomingChan = do
+--  update <- readChan tgIncomingChan
 --  putStrLn $ "=====> SENDING: " ++ (show update)
 --  let funkyMsg = "Night gathers, and now my download begins. It shall not end until the morn. I shall play no games, watch no videos, read no blogs. I shall get no rest and get no sleep. I shall live and die at my download queue. I am the leech on the network. I pledge my life and honor to the Night's Watch, for this night and all the nights to come."
 --  void (sendMessage update funkyMsg) `catch` (\e -> do putStrLn (show (e :: Control.Exception.SomeException)))
---  sendCannedResponse replyChan
+--  sendCannedResponse tgIncomingChan
 
 setLastUpdateId updateId = do
   writeFile "./last-update-id" (show updateId)
@@ -228,10 +200,18 @@ ensureAria2Running = do
   putStrLn $ "ERROR: Aria2 process died mysteriously: " ++ (show exitCode)
   ensureAria2Running
 
-startTelegramBot = do
-  replyChan <- newChan
-  forkIO $ forever $ void (doPollLoop replyChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
-  -- forkIO $ forever $ void (processIncomingMessages replyChan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
+processOutgoingMessages :: TelegramOutgoingChannel -> IO ()
+processOutgoingMessages tgOutChan = do 
+  tgMsg <- readChan tgOutChan
+  sendMessage tgMsg
+  processOutgoingMessages tgOutChan
+
+
+startTelegramBot aria2Chan tgOutChan = do
+  tgIncomingChan <- newChan
+  forkIO $ forever $ void (doPollLoop tgIncomingChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
+  forkIO $ forever $ void (processIncomingMessages tgIncomingChan aria2Chan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
+  forkIO $ forever $ void (processOutgoingMessages tgOutChan) `catch` (\e -> putStrLn $ "ERROR IN processOutgoingMessages: " ++ (show (e :: Control.Exception.SomeException)))
 
 startAria2 = do
   forkIO $ forever $ ensureAria2Running
