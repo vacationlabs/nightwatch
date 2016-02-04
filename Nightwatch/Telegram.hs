@@ -166,7 +166,7 @@ processIncomingMessages tgIncomingChan aria2Chan = do
   nwCommand <- authenticateCommand $ message update
   putStrLn $ "nwCommand received: " ++ (show nwCommand)
   case (command nwCommand) of
-    (DownloadCommand url) -> writeChan aria2Chan (Right nwCommand)
+    (DownloadCommand url) -> writeChan aria2Chan nwCommand
     _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), NT.message="What language, dost thou speaketh? Command me with: download <url>"} 
   processIncomingMessages tgIncomingChan aria2Chan
 
