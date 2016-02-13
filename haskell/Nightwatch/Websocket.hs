@@ -20,7 +20,7 @@ import qualified Data.List as DL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Lazy as TL
 
-newtype Aria2RequestID = Aria2RequestID String deriving (Show, Eq)
+newtype Aria2RequestID = Aria2RequestID String deriving (Show, Eq) 
 newtype Aria2MethodName = Aria2MethodName String deriving (Show, Eq)
 type OutstandingRpcRequest = (Aria2RequestID, AuthNightwatchCommand)
 type OutstandingRpcRequests = MVar [OutstandingRpcRequest]

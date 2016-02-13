@@ -9,7 +9,7 @@ data Nightwatch = Nightwatch
 
 mkYesod "Nightwatch" [parseRoutes|
 / HomeR GET
-|]
+|] 
 
 instance Yesod Nightwatch
 
