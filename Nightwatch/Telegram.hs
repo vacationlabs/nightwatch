@@ -26,8 +26,9 @@ import qualified Data.Text           as T
 import qualified Data.Text.IO        as T
 import qualified Control.Concurrent.Async as A
 import qualified Data.Map as M
-import Nightwatch.Types hiding (chat_id, message)
-import qualified Nightwatch.Types as NT (chat_id, message)
+import Nightwatch.DBTypes hiding (message, chatId, User(..))
+import qualified Nightwatch.DBTypes as NT (message, chatId, User(..))
+
 
 type Resp = Response TelegramResponse
 
@@ -53,8 +54,13 @@ parseIncomingMessage (Just inp)
 
 -- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
 -- authenticated in the past
-authenticateCommand :: Message -> IO (AuthNightwatchCommand)
-authenticateCommand msg = return $ AuthNightwatchCommand {command=(parseIncomingMessage $ text msg), user=(VLUser 1), NT.chat_id=(chat_id $ chat $ msg)}
+authenticateCommand :: Message -> SqlPersistM (AuthNightwatchCommand)
+authenticateCommand msg = do
+  let chatId = chat_id $ chat $ msg
+  user <- DB.authenticateChat chatId
+  case user of
+    Nothing -> return UnauthenticatedCommand
+    Just u -> return $ AuthNightwatchCommand {command=(parseIncomingMessage $ text msg), userId=(entityKey user), NT.chatId=chatId}
 
 removePrefix :: String -> String -> String
 removePrefix prefix input 

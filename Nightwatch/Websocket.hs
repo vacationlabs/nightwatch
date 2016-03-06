@@ -19,7 +19,7 @@ import Data.Functor (void)
 import qualified Data.List as DL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Lazy as TL
-import Nightwatch.DB as DB
+import Nightwatch.DBTypes as DB
 
 newtype Aria2MethodName = Aria2MethodName String deriving (Show, Eq)
 type OutstandingRpcRequest = (Aria2RequestID, AuthNightwatchCommand)
@@ -133,26 +133,30 @@ aria2Response2TelegramMessage requestList response_id obj = do
 -- response. Further, we will also get the UserId and ChatId allowing us to
 -- send a tgram message to the user.
 handleAria2Response :: OutstandingRpcRequests -> TelegramOutgoingChannel -> Aria2RequestID -> Object -> IO ()
-handleAria2Response osRpcReqs tgOutChan response_id obj = do
+handleAria2Response osRpcReqs tgOutChan responseId obj = do
   -- result <- HM.lookup "result" obj
   modifyMVar_ osRpcReqs (\requestList -> 
-    (request_id, authNwCommand) <- DL.find (findRequest response_id) requestList
+    (requestId, authNwCommand) <- DL.find (findRequest responseId) requestList
 
     case (command authNwCommand) of
       DownloadCommand url -> (HM.lookup "result" obj) >>= (\result -> Just $ )
-    case  (aria2Response2TelegramMessage requestList response_id obj) of
+    case  (aria2Response2TelegramMessage requestList responseId obj) of
       Nothing -> return requestList
-      Just tgMessage -> (writeChan tgOutChan tgMessage) >> (return $ DL.filter (findRequest response_id) requestList)
+      Just tgMessage -> (writeChan tgOutChan tgMessage) >> (return $ DL.filter (findRequest responseId) requestList)
+
+    where
+      handleAddUriResponse :: Object -> SqlPersistM ()
+      handleAddUriResponse = do
+        res <- liftIO $ HM.lookup "result" obj
+        let gid = valueToString res
+        aria2Log <- fetchAria2LogByRequestId requestId
+        case aria2Log of 
+          Nothing -> liftIO $ putStrLn "Could not find requestId=" ++ (show requestId) ++ " in the Aria2Log DB Table"
+          Just l -> do 
+            createDownload Download{downloadUserId=(userId authNwCommand), downloadGid=gid, downloadUrl=url, downloadAria2LogId=}
+            writeChan $ TelegramOutgoingMessage {tg_chat_id=(chat_id authNwCommand), message=(T.pack $ "Download GID " ++ (valueToString gid))}
     )
   return ()
-  where
-    handleAddUriResponse :: SqlPersistM ()
-    handleAddUriResponse = do
-      res <- liftIO $ HM.lookup "result" obj
-      let gid = valueToString res
-      
-      writeChan $ TelegramOutgoingMessage {tg_chat_id=(chat_id authNwCommand), message=(T.pack $ "Download GID " ++ (valueToString gid))}
-
   
 sendNightwatchCommand :: WS.Connection -> Aria2RequestID -> AuthNightwatchCommand -> IO (ByteString)
 sendNightwatchCommand conn requestId authNwCommand = do

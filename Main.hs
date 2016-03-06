@@ -1,4 +1,5 @@
 import Nightwatch.Types
+import Nightwatch.DBTypes
 import Nightwatch.Telegram
 import Nightwatch.Webapp
 import Nightwatch.Websocket
