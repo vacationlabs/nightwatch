@@ -44,10 +44,10 @@ parseIncomingMessage :: Maybe String -> NightwatchCommand
 parseIncomingMessage Nothing = InvalidCommand
 parseIncomingMessage (Just inp)
   | length matches == 0 = InvalidCommand
-  | (head matches) == "download" = DownloadCommand (head $ tail matches)
-  | (head matches) == "pause" = PauseCommand (head $ tail matches)
-  | (head matches) == "unpause" = PauseCommand (head $ tail matches)
-  | (head matches) == "status" = StatusCommand (head $ tail matches)
+  | (head matches) == "download" = DownloadCommand $ URL (head $ tail matches)
+  | (head matches) == "pause" = PauseCommand $ Aria2Gid (head $ tail matches)
+  | (head matches) == "unpause" = PauseCommand $ Aria2Gid (head $ tail matches)
+  | (head matches) == "status" = StatusCommand $ Aria2Gid (head $ tail matches)
   | otherwise = InvalidCommand
   where (_, _, _, matches) = ((inp :: String) =~ ("^(download|pause|cancel|status)[ \t\r\n\v\f]+(.*)" :: String) :: (String, String, String, [String]))
 
@@ -62,10 +62,10 @@ removePrefix prefix input
   | otherwise = input
 
 data User = User {
-  user_id :: Integer,
-  user_first_name :: String,
-  user_last_name :: Maybe String,
-  user_username :: Maybe String
+  user_id :: TgramUserId,
+  user_first_name :: TgramFirstName,
+  user_last_name :: Maybe TgramLastName,
+  user_username :: Maybe TgramUsername
 } deriving (Show, Generic)
 
 instance ToJSON User
@@ -75,7 +75,7 @@ instance FromJSON User where
   }
 
 data Chat = Chat {
-  chat_id :: Integer
+  chat_id :: TgramChatId
   --username :: Maybe String,
   --first_name :: Maybe String,
   --last_name :: Maybe String
