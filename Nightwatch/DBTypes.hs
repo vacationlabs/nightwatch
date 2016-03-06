@@ -110,28 +110,28 @@ Download
 data AuthNightwatchCommand = UnauthenticatedCommand | AuthNightwatchCommand {
   command :: NightwatchCommand,
   userId :: UserId,
-  chatId :: Integer
+  chatId :: TgramChatId
 } deriving (Show, Eq)
 
 type Aria2ChannelMessage = AuthNightwatchCommand
 type Aria2Channel = Chan Aria2ChannelMessage
 
 createAria2Log :: Aria2RequestId -> String -> Maybe TelegramLogId -> Maybe UserId -> SqlPersistM (Entity Aria2Log)
-createAria2Log requestId request telegramLogId userId = liftIO $ getCurrentTime >>= (\time -> insertEntity $ Aria2Log{aria2LogRequestId=(Just requestId), aria2LogRequest=(Just request), aria2LogTelegramLogId=telegramLogId, aria2LogUserId=userId, aria2LogCreatedAt=time, aria2LogUpdatedAt=time, aria2LogResponse=Nothing})
+createAria2Log requestId request telegramLogId userId = (liftIO getCurrentTime) >>= (\time -> insertEntity $ Aria2Log{aria2LogRequestId=(Just requestId), aria2LogRequest=(Just request), aria2LogTelegramLogId=telegramLogId, aria2LogUserId=userId, aria2LogCreatedAt=time, aria2LogUpdatedAt=time, aria2LogResponse=Nothing})
 
 recordAria2Response :: Aria2RequestId -> String -> SqlPersistM ()
-recordAria2Response requestId response = liftIO $ getCurrentTime >>= (\time -> updateWhere [Aria2LogRequestId ==. requestId] [Aria2LogResponse =. response, Aria2LogUpdatedAt =. time])
+recordAria2Response requestId response = (liftIO getCurrentTime) >>= (\time -> updateWhere [Aria2LogRequestId ==. (Just requestId)] [Aria2LogResponse =. (Just response), Aria2LogUpdatedAt =. time])
 
 createDownload :: Download -> SqlPersistM (Entity Download)
-createDownload d = liftIO $ getCurrentTime >>= (\time -> insertEntity d{downloadCreatedAt=time, downloadUpdatedAt=time})
+createDownload d = (liftIO getCurrentTime) >>= (\time -> insertEntity d{downloadCreatedAt=time, downloadUpdatedAt=time})
 
 fetchDownloadByGid :: Aria2Gid -> SqlPersistM (Maybe (Entity Download))
 fetchDownloadByGid gid = selectFirst [ DownloadGid ==. gid ] []
 
 fetchAria2LogByRequestId :: Aria2RequestId -> SqlPersistM (Maybe (Entity Aria2Log))
-fetchAria2LogByRequestId requestId = selectFirst [Aria2LogRequestId ==. requestId] [Desc Aria2LogCreatedAt]
+fetchAria2LogByRequestId requestId = selectFirst [Aria2LogRequestId ==. (Just requestId)] [Desc Aria2LogCreatedAt]
 
 -- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
 -- authenticated in the past
-authenticateChat :: TgramChatId -> SqlPersistM (Maybe User)
-authenticateChat chatId = selectFirst [UserTgramChatId ==. chatId] []
+authenticateChat :: TgramChatId -> SqlPersistM (Maybe (Entity User))
+authenticateChat chatId = selectFirst [UserTgramChatId ==. (Just chatId)] []

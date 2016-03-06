@@ -27,8 +27,8 @@ import qualified Data.Text.IO        as T
 import qualified Control.Concurrent.Async as A
 import qualified Data.Map as M
 import Nightwatch.DBTypes hiding (message, chatId, User(..))
-import qualified Nightwatch.DBTypes as NT (message, chatId, User(..))
-
+import qualified Nightwatch.DBTypes as DB (message, chatId, User(..), authenticateChat)
+import Control.Monad.IO.Class  (liftIO, MonadIO)
 
 type Resp = Response TelegramResponse
 
@@ -60,7 +60,7 @@ authenticateCommand msg = do
   user <- DB.authenticateChat chatId
   case user of
     Nothing -> return UnauthenticatedCommand
-    Just u -> return $ AuthNightwatchCommand {command=(parseIncomingMessage $ text msg), userId=(entityKey user), NT.chatId=chatId}
+    Just u -> return $ AuthNightwatchCommand {command=(parseIncomingMessage $ text msg), userId=(entityKey u), DB.chatId=chatId}
 
 removePrefix :: String -> String -> String
 removePrefix prefix input 
@@ -135,7 +135,7 @@ getUpdatesAsJSON offset = do
 sendMessage :: TelegramOutgoingMessage -> IO ()
 sendMessage tgMsg = do
   putStrLn $ "Sending to " ++ (show tgMsg)
-  void (post (apiBaseUrl ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (NT.message tgMsg)]) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
+  void (post (apiBaseUrl ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (DB.message tgMsg)]) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
     
 
 -- TODO: There's probably a better way to do this
@@ -165,15 +165,17 @@ doPollLoop tgIncomingChan lastUpdateId = do
   writeList2Chan tgIncomingChan incomingUpdates
   doPollLoop tgIncomingChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
 
-processIncomingMessages :: Chan Update -> Aria2Channel -> IO ()
+-- TODO: these seems like a very crappy way to write this function. Almost
+-- every funcation call, apart from authenticateCommand, is liftIO-ed.
+processIncomingMessages :: Chan Update -> Aria2Channel -> SqlPersistM ()
 processIncomingMessages tgIncomingChan aria2Chan = do
-  putStrLn "STARTING processIncomingMessages"
-  update <- readChan tgIncomingChan
+  liftIO $ putStrLn "STARTING processIncomingMessages"
+  update <- liftIO $ readChan tgIncomingChan
   nwCommand <- authenticateCommand $ message update
-  putStrLn $ "nwCommand received: " ++ (show nwCommand)
-  case (command nwCommand) of
+  liftIO $ putStrLn $ "nwCommand received: " ++ (show nwCommand)
+  liftIO $ case (command nwCommand) of
     (DownloadCommand url) -> writeChan aria2Chan nwCommand
-    _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), NT.message="What language, dost thou speaketh? Command me with: download <url>"} 
+    _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message="What language, dost thou speaketh? Command me with: download <url>"} 
   processIncomingMessages tgIncomingChan aria2Chan
 
 --sendCannedResponse :: Chan Update -> IO ()

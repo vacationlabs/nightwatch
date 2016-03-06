@@ -61,7 +61,7 @@ instance ToJSON TgramChatId
 data NightwatchCommand = InvalidCommand | DownloadCommand URL | PauseCommand Aria2Gid | UnpauseCommand Aria2Gid | StatusCommand Aria2Gid deriving (Show, Eq)
 
 data TelegramOutgoingMessage = TelegramOutgoingMessage {
-  tg_chat_id :: Integer,
+  tg_chat_id :: TgramChatId,
   message :: T.Text
 } deriving (Show, Eq)
 
