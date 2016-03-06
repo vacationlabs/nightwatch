@@ -88,9 +88,9 @@ jsonRpcRequest conn method request_id request = do
 -- pause ==> GID (String)
 -- unpause ==> GID (String
 -- tellStatus ==> Key-value Pair String:String for most of the cases except 'files', which is an array of key-value pairs
-aria2WebsocketReceiver :: TelegramOutgoingChannel -> OutstandingRpcRequests -> WS.Connection -> IO ()
+aria2WebsocketReceiver :: TelegramOutgoingChannel -> OutstandingRpcRequests -> WS.Connection -> SqlPersistM ()
 aria2WebsocketReceiver tgOutChan osRpcReqs conn = do
-  let loop = do   msg <- WS.receiveData conn
+  let loop = do   msg <- liftIO $ WS.receiveData conn
                   let r = decode msg :: Maybe Object
                   case r of
                     Nothing -> return ()
@@ -98,7 +98,10 @@ aria2WebsocketReceiver tgOutChan osRpcReqs conn = do
                                       -- Seems to be a notification
                                       Nothing -> putStrLn $ "RECEIVED NOTIFICATION: " ++ (show res)
                                       -- Seems to be a response to an outstanding RPC
-                                      (Just (String response_id)) -> handleAria2Response osRpcReqs tgOutChan (Aria2RequestID $ T.unpack response_id) res
+                                      (Just (String response_id)) -> do
+                                        let requestId = Aria2RequestId $ T.unpack response_id
+                                        recordAria2Response requestId (T.unpack msg) 
+                                        handleAria2Response osRpcReqs tgOutChan requestId res
                                       (Just _) -> putStrLn $ "RANDOM data in 'id' field" ++ (show res)
 
   loop
@@ -136,14 +139,19 @@ handleAria2Response osRpcReqs tgOutChan response_id obj = do
     (request_id, authNwCommand) <- DL.find (findRequest response_id) requestList
 
     case (command authNwCommand) of
-      DownloadCommand url -> (HM.lookup "result" obj) >>= (\result -> Just $ TelegramOutgoingMessage {tg_chat_id=(chat_id nwCommand), message=(T.pack $ "Download GID " ++ (valueToString result))})
-
-
+      DownloadCommand url -> (HM.lookup "result" obj) >>= (\result -> Just $ )
     case  (aria2Response2TelegramMessage requestList response_id obj) of
       Nothing -> return requestList
       Just tgMessage -> (writeChan tgOutChan tgMessage) >> (return $ DL.filter (findRequest response_id) requestList)
     )
   return ()
+  where
+    handleAddUriResponse :: SqlPersistM ()
+    handleAddUriResponse = do
+      res <- liftIO $ HM.lookup "result" obj
+      let gid = valueToString res
+      
+      writeChan $ TelegramOutgoingMessage {tg_chat_id=(chat_id authNwCommand), message=(T.pack $ "Download GID " ++ (valueToString gid))}
 
   
 sendNightwatchCommand :: WS.Connection -> Aria2RequestID -> AuthNightwatchCommand -> IO (ByteString)
