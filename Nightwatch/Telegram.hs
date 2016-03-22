@@ -29,6 +29,7 @@ import qualified Data.Map as M
 import Nightwatch.DBTypes hiding (message, chatId, User(..))
 import qualified Nightwatch.DBTypes as DB (message, chatId, User(..), authenticateChat)
 import Control.Monad.IO.Class  (liftIO, MonadIO)
+-- import Control.Monad.Except (catchError)
 
 type Resp = Response TelegramResponse
 
@@ -135,7 +136,7 @@ getUpdatesAsJSON offset = do
 sendMessage :: TelegramOutgoingMessage -> IO ()
 sendMessage tgMsg = do
   putStrLn $ "Sending to " ++ (show tgMsg)
-  void (post (apiBaseUrl ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (DB.message tgMsg)]) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
+  (void (post (apiBaseUrl ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (DB.message tgMsg)])) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
     
 
 -- TODO: There's probably a better way to do this
@@ -215,12 +216,13 @@ processOutgoingMessages tgOutChan = do
   processOutgoingMessages tgOutChan
 
 
+startTelegramBot :: Aria2Channel -> TelegramOutgoingChannel -> IO ()
 startTelegramBot aria2Chan tgOutChan = do
   tgIncomingChan <- newChan
+  forkIO $ forever $ void (runDb $ processIncomingMessages tgIncomingChan aria2Chan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
   forkIO $ forever $ void (doPollLoop tgIncomingChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
-  forkIO $ forever $ void (processIncomingMessages tgIncomingChan aria2Chan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
   forkIO $ forever $ void (processOutgoingMessages tgOutChan) `catch` (\e -> putStrLn $ "ERROR IN processOutgoingMessages: " ++ (show (e :: Control.Exception.SomeException)))
+  return ()
 
 startAria2 = do
   forkIO $ forever $ ensureAria2Running
-

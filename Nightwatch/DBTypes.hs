@@ -39,6 +39,7 @@ module Nightwatch.DBTypes(User(..)
   ,authenticateChat
   ,SqlPersistM
   ,Entity(..)
+  ,runDb
   ) where
 import Control.Monad.IO.Class  (liftIO, MonadIO)
 import Database.Persist
@@ -47,6 +48,7 @@ import Database.Persist.TH
 import Data.Time (UTCTime, getCurrentTime)
 import Nightwatch.Types
 import Control.Concurrent.Chan(Chan)
+import qualified Data.Text as T
 
 -- import Nightwatch.DBInternal
 
@@ -135,3 +137,5 @@ fetchAria2LogByRequestId requestId = selectFirst [Aria2LogRequestId ==. (Just re
 -- authenticated in the past
 authenticateChat :: TgramChatId -> SqlPersistM (Maybe (Entity User))
 authenticateChat chatId = selectFirst [UserTgramChatId ==. (Just chatId)] []
+
+runDb operation = runSqlite ":memory:" operation

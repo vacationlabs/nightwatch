@@ -31,6 +31,7 @@ import GHC.Generics (Generic)
 import Database.Persist
 import Database.Persist.Sqlite
 import Database.Persist.TH
+import qualified Network.Wreq as W(FormValue)
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
@@ -44,7 +45,7 @@ newtype TgramFirstName = TgramFirstName String deriving (Show, Eq, Generic, Read
 newtype TgramLastName = TgramLastName String deriving (Show, Eq, Generic, Read)
 newtype TgramUsername = TgramUsername String deriving (Show, Eq, Generic, Read)
 newtype TgramMsgText = TgramMsgText String deriving (Show, Eq, Generic, Read)
-newtype TgramChatId = TgramChatId Integer deriving (Show, Eq, Generic, Read)
+newtype TgramChatId = TgramChatId Integer deriving (Show, Eq, Generic, Read, W.FormValue)
 instance FromJSON TgramUserId
 instance FromJSON TgramFirstName
 instance FromJSON TgramLastName
