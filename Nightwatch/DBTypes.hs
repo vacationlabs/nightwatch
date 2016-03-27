@@ -32,9 +32,9 @@ module Nightwatch.DBTypes(User(..)
   ,Key(..)
   ,DownloadId(..)
   ,createAria2Log
+  ,createUser
   ,updateAria2Log
   ,nextAria2LogId
-  -- ,recordAria2Response
   ,createDownload
   ,fetchDownloadByGid
   ,fetchAria2LogById
@@ -44,6 +44,9 @@ module Nightwatch.DBTypes(User(..)
   ,SqlPersistM
   ,Entity(..)
   ,runDb
+  ,runMigrations
+  ,mkRequestId
+  ,unMkRequestId
   ) where
 import Control.Monad.IO.Class  (liftIO, MonadIO)
 import Database.Persist
@@ -122,6 +125,9 @@ data AuthNightwatchCommand = UnauthenticatedCommand | AuthNightwatchCommand {
 type Aria2ChannelMessage = AuthNightwatchCommand
 type Aria2Channel = Chan Aria2ChannelMessage
 
+createUser :: String -> Maybe String -> Maybe TgramUserId -> Maybe TgramUsername -> Maybe TgramChatId -> SqlPersistM (Entity User)
+createUser email name tgramUserId tgramUsername tgramChatId = (liftIO getCurrentTime) >>= (\time -> insertEntity User{userName=name, userEmail=email, userTgramUserId=tgramUserId, userTgramUsername=tgramUsername, userTgramChatId=tgramChatId, userCreatedAt=time, userUpdatedAt=time})
+
 createAria2Log :: String -> Maybe TelegramLogId -> Maybe UserId -> SqlPersistM (Entity Aria2Log)
 createAria2Log request telegramLogId userId = (liftIO getCurrentTime) >>= (\time -> insertEntity $ Aria2Log{aria2LogRequest=(Just request), aria2LogTelegramLogId=telegramLogId, aria2LogUserId=userId, aria2LogCreatedAt=time, aria2LogUpdatedAt=time, aria2LogResponse=Nothing})
 
@@ -171,4 +177,13 @@ fetchUserByTelegramUserId tgramUserId = selectFirst [ UserTgramUserId ==. (Just 
 authenticateChat :: TgramChatId -> SqlPersistM (Maybe (Entity User))
 authenticateChat chatId = selectFirst [UserTgramChatId ==. (Just chatId)] []
 
-runDb operation = runSqlite ":memory:" operation
+runDb operation = runSqlite "nightwatch.db" operation
+
+runMigrations :: IO ()
+runMigrations = runDb $ runMigration migrateAll
+
+--mkRequestId :: Integer -> Aria2LogId
+mkRequestId x = Aria2LogKey $ fromIntegral x
+
+--unMkRequestId :: Aria2LogId -> Integer
+unMkRequestId x = unSqlBackendKey $ unAria2LogKey x

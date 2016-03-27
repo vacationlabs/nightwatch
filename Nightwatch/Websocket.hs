@@ -100,7 +100,7 @@ instance FromJSON AddUriResult where
 jsonRpcRequest :: (ToJSON params) => WS.Connection -> Aria2MethodName -> Aria2LogId -> params -> IO (BL.ByteString)
 jsonRpcRequest conn method request_id request = do
   let (Aria2MethodName mname)  = method
-  let x = encode JsonRpcRequest{request_id=(show request_id), method=mname, params=request}
+  let x = encode JsonRpcRequest{request_id=(show $ unMkRequestId request_id), method=mname, params=request}
   putStrLn $ "===> SENDING TO Aria2: " ++ (show x)
   WS.sendTextData conn $ x
   return x
@@ -119,7 +119,7 @@ aria2WebsocketReceiver tgOutChan conn = forever $ do
   where
     aria2WebsocketReceiver_ :: BL.ByteString -> Integer -> Object -> IO ()
     aria2WebsocketReceiver_ msg requestId obj = runDb $ do
-      let k = Aria2LogKey $ fromIntegral requestId
+      let k = mkRequestId requestId
       aria2Log <- (fetchAria2LogById k)
       case aria2Log of
         Nothing -> liftIO $ putStrLn $ "Could not find Aria2Log with ID=" ++ (show requestId)
