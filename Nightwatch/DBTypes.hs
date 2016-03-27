@@ -135,8 +135,8 @@ updateAria2Log aria2LogId aria2Log = do
 -- recordAria2Response :: Aria2RequestId -> String -> SqlPersistM ()
 -- recordAria2Response requestId response = (liftIO getCurrentTime) >>= (\time -> updateWhere [Aria2LogRequestId ==. (Just requestId)] [Aria2LogResponse =. (Just response), Aria2LogUpdatedAt =. time])
 
-createDownload :: Download -> SqlPersistM (Entity Download)
-createDownload d = (liftIO getCurrentTime) >>= (\time -> insertEntity d{downloadCreatedAt=time, downloadUpdatedAt=time})
+createDownload :: URL -> Aria2Gid -> Aria2LogId -> UserId -> SqlPersistM (Entity Download)
+createDownload url gid logId userId = (liftIO getCurrentTime) >>= (\time -> insertEntity Download{downloadUrl=url, downloadGid=gid, downloadAria2LogId=logId, downloadUserId=userId, downloadCreatedAt=time, downloadUpdatedAt=time})
 
 fetchDownloadByGid :: Aria2Gid -> SqlPersistM (Maybe (Entity Download))
 fetchDownloadByGid gid = selectFirst [ DownloadGid ==. gid ] []

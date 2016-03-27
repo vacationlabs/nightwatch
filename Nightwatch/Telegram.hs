@@ -16,7 +16,8 @@ import Data.Functor (void)
 import Network.XmlRpc.Client
 import Data.Time
 import Data.Time.Clock.POSIX
-import Data.ByteString.Lazy.Internal (ByteString)
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Lazy.Char8 as BL(pack, unpack)
 import Text.Regex.Posix
 import System.IO.Error
 import Text.Read (readMaybe)
@@ -120,7 +121,7 @@ data TelegramResponse = TelegramResponse {
 instance FromJSON TelegramResponse
 instance ToJSON TelegramResponse
 
-getUpdates :: (Num a, Show a) => Maybe a -> IO (Response Data.ByteString.Lazy.Internal.ByteString)
+getUpdates :: (Num a, Show a) => Maybe a -> IO (Response BL.ByteString)
 getUpdates Nothing = getUpdates (Just 0)
 getUpdates (Just offset) = do
   putStrLn (apiBaseUrl ++ "/getUpdates?offset=" ++ (show offset))

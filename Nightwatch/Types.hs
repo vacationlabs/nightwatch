@@ -40,6 +40,7 @@ newtype URL = URL String deriving (Show, Eq, Generic, Read)
 newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read)
 instance ToJSON URL
 instance ToJSON Aria2Gid
+instance FromJSON Aria2Gid
 
 newtype TgramUserId = TgramUserId Integer deriving (Show, Eq, Generic, Read)
 newtype TgramFirstName = TgramFirstName String deriving (Show, Eq, Generic, Read)
