@@ -26,17 +26,21 @@ module Nightwatch.DBTypes(User(..)
   ,TgramUserId(..)
   ,TgramMsgText(..)
   ,TgramChatId(..)
-  ,Aria2RequestId(..)
   ,UserId(..)
   ,TelegramLogId(..)
   ,Aria2LogId(..)
+  ,Key(..)
   ,DownloadId(..)
   ,createAria2Log
-  ,recordAria2Response
+  ,updateAria2Log
+  ,nextAria2LogId
+  -- ,recordAria2Response
   ,createDownload
   ,fetchDownloadByGid
-  ,fetchAria2LogByRequestId
+  ,fetchAria2LogById
   ,authenticateChat
+  ,fetchTelegramLogById
+  ,fetchUserByTelegramUserId
   ,SqlPersistM
   ,Entity(..)
   ,runDb
@@ -80,12 +84,12 @@ TelegramLog
   tgramUserId TgramUserId
   tgramChatId TgramChatId
   tgramMsgText TgramMsgText Maybe
+  nightwatchCommand NightwatchCommand
   createdAt UTCTime
   updatedAt UTCTime
   deriving Show
 
 Aria2Log
-  requestId Aria2RequestId Maybe
   request String Maybe
   response String Maybe
   telegramLogId TelegramLogId Maybe
@@ -118,11 +122,18 @@ data AuthNightwatchCommand = UnauthenticatedCommand | AuthNightwatchCommand {
 type Aria2ChannelMessage = AuthNightwatchCommand
 type Aria2Channel = Chan Aria2ChannelMessage
 
-createAria2Log :: Aria2RequestId -> String -> Maybe TelegramLogId -> Maybe UserId -> SqlPersistM (Entity Aria2Log)
-createAria2Log requestId request telegramLogId userId = (liftIO getCurrentTime) >>= (\time -> insertEntity $ Aria2Log{aria2LogRequestId=(Just requestId), aria2LogRequest=(Just request), aria2LogTelegramLogId=telegramLogId, aria2LogUserId=userId, aria2LogCreatedAt=time, aria2LogUpdatedAt=time, aria2LogResponse=Nothing})
+createAria2Log :: String -> Maybe TelegramLogId -> Maybe UserId -> SqlPersistM (Entity Aria2Log)
+createAria2Log request telegramLogId userId = (liftIO getCurrentTime) >>= (\time -> insertEntity $ Aria2Log{aria2LogRequest=(Just request), aria2LogTelegramLogId=telegramLogId, aria2LogUserId=userId, aria2LogCreatedAt=time, aria2LogUpdatedAt=time, aria2LogResponse=Nothing})
 
-recordAria2Response :: Aria2RequestId -> String -> SqlPersistM ()
-recordAria2Response requestId response = (liftIO getCurrentTime) >>= (\time -> updateWhere [Aria2LogRequestId ==. (Just requestId)] [Aria2LogResponse =. (Just response), Aria2LogUpdatedAt =. time])
+updateAria2Log :: Aria2LogId -> Aria2Log -> SqlPersistM (Aria2Log)
+updateAria2Log aria2LogId aria2Log = do 
+  time <- (liftIO getCurrentTime) 
+  let newLog = aria2Log{aria2LogUpdatedAt=time}
+  repsert aria2LogId newLog
+  return newLog
+
+-- recordAria2Response :: Aria2RequestId -> String -> SqlPersistM ()
+-- recordAria2Response requestId response = (liftIO getCurrentTime) >>= (\time -> updateWhere [Aria2LogRequestId ==. (Just requestId)] [Aria2LogResponse =. (Just response), Aria2LogUpdatedAt =. time])
 
 createDownload :: Download -> SqlPersistM (Entity Download)
 createDownload d = (liftIO getCurrentTime) >>= (\time -> insertEntity d{downloadCreatedAt=time, downloadUpdatedAt=time})
@@ -130,8 +141,30 @@ createDownload d = (liftIO getCurrentTime) >>= (\time -> insertEntity d{download
 fetchDownloadByGid :: Aria2Gid -> SqlPersistM (Maybe (Entity Download))
 fetchDownloadByGid gid = selectFirst [ DownloadGid ==. gid ] []
 
-fetchAria2LogByRequestId :: Aria2RequestId -> SqlPersistM (Maybe (Entity Aria2Log))
-fetchAria2LogByRequestId requestId = selectFirst [Aria2LogRequestId ==. (Just requestId)] [Desc Aria2LogCreatedAt]
+fetchAria2LogById :: Aria2LogId -> SqlPersistM (Maybe Aria2Log)
+fetchAria2LogById requestId = get requestId
+
+fetchTelegramLogById :: TelegramLogId -> SqlPersistM (Maybe TelegramLog)
+fetchTelegramLogById tgramLogId = get tgramLogId
+
+nextAria2LogId :: SqlPersistM (Aria2LogId)
+nextAria2LogId = (liftIO getCurrentTime) >>= (\time -> insert Aria2Log{aria2LogRequest=Nothing, aria2LogResponse=Nothing, aria2LogTelegramLogId=Nothing, aria2LogUserId=Nothing, aria2LogCreatedAt=time, aria2LogUpdatedAt=time})
+
+fetchUserByTelegramUserId :: TgramUserId -> SqlPersistM (Maybe (Entity User))
+fetchUserByTelegramUserId tgramUserId = selectFirst [ UserTgramUserId ==. (Just tgramUserId) ] []
+
+-- fetchLargestAria2RequestId :: SqlPersistM (Aria2RequestId)
+-- fetchLargestAria2RequestId = do 
+--   res <- runQuery
+--   return $ if (length res) == 0 
+--     then (Aria2RequestId 0)
+--     else (unSingle (head res))
+--   where 
+--     runQuery :: SqlPersistM [Single Aria2RequestId]
+--     runQuery = rawSql "select max(request_id) from aria2_log" []
+
+-- incrementAria2RequestId :: Aria2RequestId -> Aria2RequestId
+-- incrementAria2RequestId (Aria2RequestId x) = Aria2RequestId $ 1+ x
 
 -- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
 -- authenticated in the past

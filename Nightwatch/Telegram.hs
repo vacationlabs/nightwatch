@@ -26,10 +26,11 @@ import qualified Data.Text           as T
 import qualified Data.Text.IO        as T
 import qualified Control.Concurrent.Async as A
 import qualified Data.Map as M
+import Nightwatch.Types hiding (message)
+import qualified Nightwatch.Types as Ty(message)
 import Nightwatch.DBTypes hiding (message, chatId, User(..))
 import qualified Nightwatch.DBTypes as DB (message, chatId, User(..), authenticateChat)
 import Control.Monad.IO.Class  (liftIO, MonadIO)
--- import Control.Monad.Except (catchError)
 
 type Resp = Response TelegramResponse
 
@@ -62,11 +63,6 @@ authenticateCommand msg = do
   case user of
     Nothing -> return UnauthenticatedCommand
     Just u -> return $ AuthNightwatchCommand {command=(parseIncomingMessage $ text msg), userId=(entityKey u), DB.chatId=chatId}
-
-removePrefix :: String -> String -> String
-removePrefix prefix input 
-  | isPrefixOf prefix input = drop (length prefix) input
-  | otherwise = input
 
 data User = User {
   user_id :: TgramUserId,

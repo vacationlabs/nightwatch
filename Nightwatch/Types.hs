@@ -20,7 +20,7 @@ module Nightwatch.Types (NightwatchCommand(..)
   ,TgramUserId(..)
   ,TgramMsgText(..)
   ,TgramChatId(..)
-  ,Aria2RequestId(..)) where
+  ,removePrefix) where
 
 import qualified Data.Text           as T
 import qualified Data.Text.IO        as T
@@ -32,11 +32,12 @@ import Database.Persist
 import Database.Persist.Sqlite
 import Database.Persist.TH
 import qualified Network.Wreq as W(FormValue)
+import Data.List (isPrefixOf, drop)
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
-newtype URL = URL String deriving (Show, Eq, Generic)
-newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic)
+newtype URL = URL String deriving (Show, Eq, Generic, Read)
+newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read)
 instance ToJSON URL
 instance ToJSON Aria2Gid
 
@@ -59,7 +60,7 @@ instance ToJSON TgramUsername
 instance ToJSON TgramMsgText
 instance ToJSON TgramChatId
 
-data NightwatchCommand = InvalidCommand | DownloadCommand URL | PauseCommand Aria2Gid | UnpauseCommand Aria2Gid | StatusCommand Aria2Gid deriving (Show, Eq)
+data NightwatchCommand = InvalidCommand | DownloadCommand URL | PauseCommand Aria2Gid | UnpauseCommand Aria2Gid | StatusCommand Aria2Gid deriving (Show, Eq, Generic, Read)
 
 data TelegramOutgoingMessage = TelegramOutgoingMessage {
   tg_chat_id :: TgramChatId,
@@ -68,7 +69,7 @@ data TelegramOutgoingMessage = TelegramOutgoingMessage {
 
 type TelegramOutgoingChannel = Chan TelegramOutgoingMessage
 
-newtype Aria2RequestId = Aria2RequestId String deriving (Show, Eq, Generic, Read)
+-- newtype Aria2RequestId = Aria2RequestId Integer deriving (Show, Eq, Generic, Read, Num)
 
 instance PersistField URL where
   toPersistValue (URL url) = PersistText (T.pack url)
@@ -107,4 +108,13 @@ derivePersistField "TgramUsername"
 derivePersistField "TgramFirstName"
 derivePersistField "TgramLastName"
 derivePersistField "TgramMsgText"
-derivePersistField "Aria2RequestId"
+-- derivePersistField "URL"
+-- derivePersistField "Aria2Gid"
+derivePersistField "NightwatchCommand"
+-- derivePersistField "Aria2RequestId"
+
+removePrefix :: String -> String -> String
+removePrefix prefix input 
+  | isPrefixOf prefix input = drop (length prefix) input
+  | otherwise = input
+

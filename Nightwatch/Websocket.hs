@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings     #-}
 module Nightwatch.Websocket (startAria2WebsocketClient) where
 import qualified Network.WebSockets  as WS
@@ -6,7 +7,8 @@ import qualified Data.Text.IO        as T
 import qualified Control.Concurrent.Async as A
 import qualified Data.Map as M
 import Data.Aeson
-import Data.Aeson.Types(Parser, parseMaybe)
+import Data.Aeson.Types
+import GHC.Generics (Generic)
 import Control.Concurrent
 import qualified Data.ByteString.Lazy.Internal as BS
 import Data.ByteString.Lazy.Internal (ByteString)
@@ -14,16 +16,20 @@ import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Ex
 import Control.Monad (forever)
 import Control.Concurrent.Chan
 import Nightwatch.Telegram
-import Nightwatch.Types
+import Nightwatch.Types hiding (message)
+import qualified Nightwatch.Types as Ty(message)
 import Data.Functor (void)
 import qualified Data.List as DL
 import qualified Data.HashMap.Strict as HM
 import qualified Data.Text.Lazy as TL
 import Nightwatch.DBTypes as DB
+import Text.Read (readMaybe)
+import Control.Monad.IO.Class  (liftIO, MonadIO)
+
 
 newtype Aria2MethodName = Aria2MethodName String deriving (Show, Eq)
-type OutstandingRpcRequest = (Aria2RequestId, AuthNightwatchCommand)
-type OutstandingRpcRequests = MVar [OutstandingRpcRequest]
+-- type OutstandingRpcRequest = (aria2LogUserId, AuthNightwatchCommand)
+-- type OutstandingRpcRequests = MVar [OutstandingRpcRequest]
 
 data VersionResponse = VersionResponse {
   version :: String,
@@ -44,16 +50,30 @@ data JsonRpcRequest p = JsonRpcRequest {
 instance (ToJSON p) => ToJSON (JsonRpcRequest p) where
   toJSON (JsonRpcRequest request_id method params) = object ["jsonrpc" .= ("2.0"::String), "id" .= request_id, "method" .= method, "params" .= params]
 
--- data JsonRpcError = JsonRpcError {
---   code :: Integer,
---   message :: String
--- } deriving (Show)
+data JsonRpcError = JsonRpcError {
+  code :: Integer,
+  message :: String
+} deriving (Show, Eq)
 
--- data JsonRpcResponse p = JsonRpcResponse {
---    response_id :: Maybe String,
---    result :: Maybe p,
---    rpc_error :: Maybe JsonRpcError
--- } deriving (Show)
+data JsonRpcResponse p = JsonRpcResponse {
+   response_id :: Maybe Aria2LogId,
+   result :: Maybe p,
+   rpc_error :: Maybe JsonRpcError
+} deriving (Show, Eq)
+
+data AddUriResult = AddUriResult {
+  addUriGid :: Aria2Gid
+} deriving (Show, Eq, Generic)
+
+instance FromJSON JsonRpcError
+instance (FromJSON p) => ToJSON (JsonRpcResponse p)
+instance FromJSON AddUriResult where
+  parseJSON = genericParseJSON defaultOptions {
+    fieldLabelModifier = removePrefix "addUri",
+    constructorTagModifier = T.unpack . T.toLower . T.pack -- TODO: Figure out the correct lowcase func
+  }
+
+
 
 -- instance FromJSON JsonRpcError where
 --   parseJSON (Object v) =  
@@ -66,46 +86,41 @@ instance (ToJSON p) => ToJSON (JsonRpcRequest p) where
 --                       <*> v .:? "result"
 --                       <*> v .:? "error"
 
-jsonRpcRequest :: (ToJSON params) => WS.Connection -> Aria2MethodName -> Aria2RequestId -> params -> IO (ByteString)
+-- addUri ==> GID (String)
+-- pause ==> GID (String)
+-- remove ==> GID (String)
+-- tellStatus ==> Key-value Pair String:String for most of the cases except 'files', which is an array of key-value pairs
+-- unpause ==> GID (String
+jsonRpcRequest :: (ToJSON params) => WS.Connection -> Aria2MethodName -> Aria2LogId -> params -> IO (ByteString)
 jsonRpcRequest conn method request_id request = do
   let (Aria2MethodName mname)  = method
-      (Aria2RequestId rid) = request_id
-  let x = encode $ JsonRpcRequest {request_id=rid, method=mname, params=request}
+  let x = encode JsonRpcRequest{request_id=(show request_id), method=mname, params=request}
   putStrLn $ "===> SENDING TO Aria2: " ++ (show x)
   WS.sendTextData conn $ x
   return x
 
+aria2WebsocketReceiver :: TelegramOutgoingChannel -> WS.Connection -> IO ()
+aria2WebsocketReceiver tgOutChan conn = forever $ do
+  msg <- WS.receiveData conn :: IO String
+  case (decode msg :: Maybe Object) of
+    Nothing -> putStrLn "Received blank ping from Aria2. Ignoring"
+    Just obj -> case (HM.lookup "id" obj) of 
+      Nothing -> putStrLn $ "RECEIVED NOTIFICATION: " ++ (show obj)
+      Just (String x) -> case (readMaybe (T.unpack x) :: Maybe Integer) of
+        Nothing -> putStrLn $ "Improper responseId received from Aria2. Ignoring=" ++ (show x)
+        Just y -> aria2WebsocketReceiver_ msg y obj
 
-  -- let v = do res <- decode msg
-  --            flip parseMaybe res $ \o -> do
-  --                                        r <- o .: "result"
-  --                                        return $ "result=" ++ (show (r :: VersionResponse))
-
-
-
--- addUri ==> GID (String)
--- remove ==> GID (String)
--- pause ==> GID (String)
--- unpause ==> GID (String
--- tellStatus ==> Key-value Pair String:String for most of the cases except 'files', which is an array of key-value pairs
-aria2WebsocketReceiver :: TelegramOutgoingChannel -> OutstandingRpcRequests -> WS.Connection -> IO ()
-aria2WebsocketReceiver tgOutChan osRpcReqs conn = do
-  let loop = do   msg <- WS.receiveData conn
-                  let r = decode msg :: Maybe Object
-                  case r of
-                    Nothing -> return ()
-                    Just res -> case (HM.lookup "id" res) of 
-                                      -- Seems to be a notification
-                                      Nothing -> putStrLn $ "RECEIVED NOTIFICATION: " ++ (show res)
-                                      -- Seems to be a response to an outstanding RPC
-                                      (Just (String response_id)) -> do
-                                        let requestId = Aria2RequestId $ T.unpack response_id
-                                        recordAria2Response requestId (T.unpack msg) 
-                                        handleAria2Response osRpcReqs tgOutChan requestId res
-                                      (Just _) -> putStrLn $ "RANDOM data in 'id' field" ++ (show res)
-
-  loop
-  return ()
+  where
+    aria2WebsocketReceiver_ :: String -> Integer -> Object -> IO ()
+    aria2WebsocketReceiver_ msg requestId obj = runDb $ do
+      let k = Aria2LogKey requestId
+      aria2Log <- (fetchAria2LogById k)
+      case aria2Log of
+        Nothing -> liftIO $ putStrLn $ "Could not find Aria2Log with ID=" ++ (show requestId)
+        Just l -> do
+          updateAria2Log k l{aria2LogResponse=(Just msg)}
+          liftIO $ handleAria2Response tgOutChan k obj l
+          liftIO $ putStrLn $ "Received response to requestId " ++ (show requestId) ++ " and handled successfully."
 
 valueToString :: Value -> String
 valueToString value = case (fromJSON value :: Result String) of
@@ -113,15 +128,12 @@ valueToString value = case (fromJSON value :: Result String) of
   (Error s) -> s
 
 
-findRequest :: Aria2RequestId -> (OutstandingRpcRequest -> Bool)
-findRequest r = (\(request_id, _) -> r==request_id)
-
-aria2Response2TelegramMessage :: [OutstandingRpcRequest] -> Aria2RequestId -> Object -> Maybe TelegramOutgoingMessage
-aria2Response2TelegramMessage requestList response_id obj = do
-  (request_id, nwCommand) <- DL.find (findRequest response_id) requestList
-  case (command nwCommand) of
-    DownloadCommand url -> (HM.lookup "result" obj) >>= (\result -> Just $ TelegramOutgoingMessage {tg_chat_id=(chatId nwCommand), message=(T.pack $ "Download GID " ++ (valueToString result))})
-    _ -> Nothing
+-- aria2Response2TelegramMessage :: [OutstandingRpcRequest] -> Aria2LogId -> Object -> Maybe TelegramOutgoingMessage
+-- aria2Response2TelegramMessage requestList response_id obj = do
+--   (request_id, nwCommand) <- DL.find (findRequest response_id) requestList
+--   case (command nwCommand) of
+--     DownloadCommand url -> (HM.lookup "result" obj) >>= (\result -> Just $ TelegramOutgoingMessage {tg_chat_id=(chatId nwCommand), message=(T.pack $ "Download GID " ++ (valueToString result))})
+--     _ -> Nothing
 
 
 -- This method is called with we get a response with a response_id (as opposed
@@ -132,39 +144,37 @@ aria2Response2TelegramMessage requestList response_id obj = do
 -- we'll get the NightwatchCommand, which will tell us how to parse this
 -- response. Further, we will also get the UserId and ChatId allowing us to
 -- send a tgram message to the user.
-handleAria2Response :: OutstandingRpcRequests -> TelegramOutgoingChannel -> Aria2RequestId -> Object -> IO ()
-handleAria2Response osRpcReqs tgOutChan responseId obj = modifyMVar_ generateNewOsRpcReqs osRpcReqs 
-  where
-    generateNewOsRpcReqs :: OutstandingRpcRequests -> IO (OutstandingRpcRequests)
-    generateNewOsRpcReqs requestList = do 
-      -- NOTE: Since we have recieved a **response** and not a notification,
-      -- we can assume that we should ALWAYS have an originalRequest
-      let osRpcReq = (DL.find (findRequest responseId) requestList)
-      let aria2Log = fetchAria2LogByRequestId responseId
-      let originalRequest = if osRpcReq == Nothing
-        then (entityValue aria2Log)
+handleAria2Response :: TelegramOutgoingChannel -> Aria2LogId -> Object -> Aria2Log -> IO ()
+handleAria2Response tgOutChan responseId obj aria2Log = do
+  let tgramLogId = aria2LogTelegramLogId aria2Log
+  case tgramLogId of
+    Nothing -> putStrLn $ "ERROR: Aria2Log does not have a correspndonding TelegramLogId. Ignoring=" ++ (show aria2Log)
+    Just tgramLogId -> do
+      tgramLog <- runDb $ fetchTelegramLogById tgramLogId
+      case tgramLog of
+        Nothing -> putStrLn $ "ERROR: Could not find corresponding telegramLog. Don't know what to do. Ignore. Telegram Log ID=" ++ (show tgramLogId)
+        Just tgramLog -> do
+          let nwCommand = (telegramLogNightwatchCommand tgramLog)
+          case nwCommand of
+            InvalidCommand -> putStrLn $ "ERROR: Very strange, how did an InvalidCommand get converted into an Aria2Log in the first place"
+            DownloadCommand url -> handleAddUriResponse tgramLog aria2Log obj
+            _ -> putStrLn $ "Have not implemented handling of such responses: (responseId, request)=" ++ show (responseId, nwCommand)
 
-      case originalRequest of 
-        Nothing -> 
-      case  of
-        Nothing -> putStrLn $ "Could not find request ID=" ++ (show responseId) ++ " in outstanding RPC request-list. Ignoring."
-        Just (_, authNwCommand) -> case (command authNwCommand) of
-          DownloadCommand url -> handleAddUriResponse authNwCommand responseId obj
-          _ -> do putStrLn $ "Have not implemented handling of such responses: (responseId, request)=" ++ show (responseId, authNwCommand)
-      return $ DL.filter (findRequest responseId) requestList
-
-    handleAddUriResponse :: AuthNightwatchCommand -> IO ()
-    handleAddUriResponse authNwCommand = do
-      res <- HM.lookup "result" obj
-      let gid = valueToString res
-      aria2LogId <- runDb $ entityKey $ fetchAria2LogByRequestId responseId
-      case aria2LogId of 
-        Nothing -> putStrLn "Could not find responseId=" ++ (show responseId) ++ " in the Aria2Log DB Table"
-        Just l -> do 
-          runDb $ createDownload Download{downloadUserId=(userId authNwCommand), downloadGid=gid, downloadUrl=url, downloadAria2LogId=aria2LogId}
-          writeChan $ TelegramOutgoingMessage {tg_chat_id=(chatId authNwCommand), message=(T.pack $ "Download GID " ++ (valueToString gid))}
   
-sendNightwatchCommand :: WS.Connection -> Aria2RequestId -> AuthNightwatchCommand -> IO (ByteString)
+  where
+    handleAddUriResponse :: TelegramLog -> Aria2Log -> Object -> IO ()
+    handleAddUriResponse tgramLog aria2Log = do
+      let gid = (HM.lookup "result" obj) >>= (\res -> valueToString res)
+      (userEntity, (DownloadCommand url)) <- userAndCommand tgramLog
+      runDb $ createDownload Download{downloadUserId=(entityKey $ userEntity), downloadGid=gid, downloadUrl=url, downloadAria2LogId=responseId}
+      writeChan $ TelegramOutgoingMessage {tg_chat_id=(telegramLogTgramChatId tgramLog), Ty.message=(T.pack $ "Download GID " ++ gid)}
+
+    userAndCommand :: TelegramLog -> IO ((Entity User, NightwatchCommand))
+    userAndCommand tgramLog = do
+      let userEntity = (runDb $ fetchUserByTelegramUserId $ telegramLogTgramUserId tgramLog)
+      (userEntity, (telegramLogNightwatchCommand tgramLog))
+  
+sendNightwatchCommand :: WS.Connection -> Aria2LogId -> AuthNightwatchCommand -> IO (ByteString)
 sendNightwatchCommand conn requestId authNwCommand = do
   jsonRequest <- case (command authNwCommand) of
                   DownloadCommand url -> jsonRpcRequest conn (Aria2MethodName "aria2.addUri") requestId [[url]]
@@ -173,18 +183,17 @@ sendNightwatchCommand conn requestId authNwCommand = do
   -- TODO: we need to figure out how to get the telegramLogId here.
   -- createAria2Log requestId (T.unpack jsonRequest) Nothing (userId authNwCommand)
 
-aria2WebsocketSender :: Aria2Channel -> OutstandingRpcRequests -> TelegramOutgoingChannel ->  WS.Connection -> IO ()
-aria2WebsocketSender aria2Chan osRpcReqs tgOutChan conn = return (aria2WebsocketSender_ 0)
-  where 
-    aria2WebsocketSender_ requestId = do
-      msg <- (readChan aria2Chan)
-      let aria2RequestID = (Aria2RequestId $ show requestId)
-      putStrLn $ "Nightwatch command received:" ++ (show msg)
-      modifyMVar_ osRpcReqs (\a -> return $ (aria2RequestID, msg):a)
-      -- TODO: We're making a network call here. There should be a some sort of error handling...
-      -- TODO: we need to figure out how to get the telegramLogId here.
-      (sendNightwatchCommand conn aria2RequestID msg) >>= (\jsonRequest -> createAria2Log requestId (T.unpack jsonRequest) Nothing (userId authNwCommand))
-      aria2WebsocketSender_ $ requestId + 1
+aria2WebsocketSender :: Aria2Channel -> TelegramOutgoingChannel ->  WS.Connection -> IO ()
+aria2WebsocketSender aria2Chan osRpcReqs tgOutChan conn = forever $ do
+  authNwCommand <- (readChan aria2Chan)
+  putStrLn $ "Nightwatch command received:" ++ (show authNwCommand) ++ " Sending to Aria2 and logging to DB"
+  requestId <- runDb $ nextAria2LogId
+  -- TODO: We're making a network call here. There should be a some sort of error handling...
+  -- TODO: we need to figure out how to get the telegramLogId here.
+  jsonRequest <- (sendNightwatchCommand conn requestId authNwCommand)
+  let aria2Log = fetchAria2LogById requestId
+  runDb $ updateAria2Log requestId aria2Log{aria2LogRequest=(T.unpack jsonRequest), aria2LogUserId=(userId authNwCommand)}
+  
 
 aria2WebsocketClient :: Aria2Channel -> TelegramOutgoingChannel -> WS.ClientApp ()
 aria2WebsocketClient aria2Chan tgOutChan conn = do
