@@ -25,6 +25,7 @@ import qualified Data.Text.Lazy as TL
 import Nightwatch.DBTypes as DB
 import Text.Read (readMaybe)
 import Control.Monad.IO.Class  (liftIO, MonadIO)
+import qualified GHC.Stack as Stk
 
 
 newtype Aria2MethodName = Aria2MethodName String deriving (Show, Eq)
@@ -55,7 +56,7 @@ data JsonRpcError = JsonRpcError {
   message :: String
 } deriving (Show, Generic)
 
-data (FromJSON p) => JsonRpcResponse p = JsonRpcResponse {
+data JsonRpcResponse p = JsonRpcResponse {
    response_id :: Maybe Aria2LogId,
    result :: Maybe p,
    rpc_error :: Maybe JsonRpcError
@@ -106,7 +107,7 @@ jsonRpcRequest conn method request_id request = do
   return x
 
 aria2WebsocketReceiver :: TelegramOutgoingChannel -> WS.Connection -> IO ()
-aria2WebsocketReceiver tgOutChan conn = forever $ do
+aria2WebsocketReceiver tgOutChan conn = forever $ logAllExceptions "Error in aria2WebsocketReceiver: " $ do
   msg <- WS.receiveData conn :: IO BL.ByteString
   case (decode msg :: Maybe Object) of
     Nothing -> putStrLn "Received blank ping from Aria2. Ignoring"
@@ -195,7 +196,7 @@ sendNightwatchCommand conn requestId authNwCommand = do
   -- createAria2Log requestId (T.unpack jsonRequest) Nothing (userId authNwCommand)
 
 aria2WebsocketSender :: Aria2Channel -> TelegramOutgoingChannel ->  WS.Connection -> IO ()
-aria2WebsocketSender aria2Chan tgOutChan conn = forever $ do
+aria2WebsocketSender aria2Chan tgOutChan conn = forever $ logAllExceptions "Error in aria2WebsocketSender" $ do
   authNwCommand <- (readChan aria2Chan)
   putStrLn $ "Nightwatch command received:" ++ (show authNwCommand) ++ " Sending to Aria2 and logging to DB"
   requestId <- runDb $ nextAria2LogId
@@ -207,7 +208,7 @@ aria2WebsocketSender aria2Chan tgOutChan conn = forever $ do
     case aria2Log of
       Nothing -> error $ "ERROR: Super-weirdness / just got this aria2LogId from the DB and now it's mossing=" ++ (show requestId)
       Just aria2Log -> updateAria2Log requestId aria2Log{aria2LogRequest=(Just $ BL.unpack jsonRequest), aria2LogUserId=(Just $ userId authNwCommand)}
-  
+
 
 aria2WebsocketClient :: Aria2Channel -> TelegramOutgoingChannel -> WS.ClientApp ()
 aria2WebsocketClient aria2Chan tgOutChan conn = do
@@ -218,5 +219,7 @@ aria2WebsocketClient aria2Chan tgOutChan conn = do
 
 startAria2WebsocketClient :: Aria2Channel -> TelegramOutgoingChannel -> IO ()
 startAria2WebsocketClient aria2Chan tgOutChan = do 
-  forkIO $ forever $ void (WS.runClient "localhost" 9999 "/jsonrpc" $ aria2WebsocketClient aria2Chan tgOutChan) `catch` (\e -> putStrLn $ "ERROR IN websocket client: " ++ (show (e :: Control.Exception.SomeException)))
+  forkIO $ forever $ logAllExceptions "ERROR IN WS.runClient: " $ WS.runClient "localhost" 9999 "/jsonrpc" $ aria2WebsocketClient aria2Chan tgOutChan
   return ()
+
+logAllExceptions logMarker fn = (void fn) `catch` (\e -> Stk.currentCallStack >>= (\stack -> putStrLn $ logMarker ++ (show (e :: Control.Exception.SomeException)) ++ "\nSTACKTRACE\n" ++ (show stack)))
