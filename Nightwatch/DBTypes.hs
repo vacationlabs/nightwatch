@@ -31,6 +31,7 @@ module Nightwatch.DBTypes(User(..)
   ,Aria2LogId(..)
   ,Key(..)
   ,DownloadId(..)
+  ,ConnectionPool
   ,createAria2Log
   ,createUser
   ,updateAria2Log
@@ -177,10 +178,10 @@ fetchUserByTelegramUserId tgramUserId = selectFirst [ UserTgramUserId ==. (Just 
 authenticateChat :: TgramChatId -> SqlPersistM (Maybe (Entity User))
 authenticateChat chatId = selectFirst [UserTgramChatId ==. (Just chatId)] []
 
-runDb operation = runSqlite "nightwatch.db" operation
+runDb pool operation = _runSqlPool operation pool
 
-runMigrations :: IO ()
-runMigrations = runDb $ runMigration migrateAll
+runMigrations :: ConnectionPool -> IO ()
+runMigrations pool = runSqlPool (runMigration migrateAll) pool
 
 --mkRequestId :: Integer -> Aria2LogId
 mkRequestId x = Aria2LogKey $ fromIntegral x

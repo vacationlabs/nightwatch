@@ -20,7 +20,9 @@ module Nightwatch.Types (NightwatchCommand(..)
   ,TgramUserId(..)
   ,TgramMsgText(..)
   ,TgramChatId(..)
-  ,removePrefix) where
+  ,removePrefix
+  ,logAllExceptions
+  ) where
 
 import qualified Data.Text           as T
 import qualified Data.Text.IO        as T
@@ -33,6 +35,9 @@ import Database.Persist.Sqlite
 import Database.Persist.TH
 import qualified Network.Wreq as W(FormValue)
 import Data.List (isPrefixOf, drop)
+import qualified GHC.Stack as Stk
+import Data.Functor (void)
+import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
@@ -119,3 +124,4 @@ removePrefix prefix input
   | isPrefixOf prefix input = drop (length prefix) input
   | otherwise = input
 
+logAllExceptions logMarker fn = (void fn) `catch` (\e -> Stk.currentCallStack >>= (\stack -> putStrLn $ logMarker ++ (show (e :: Control.Exception.SomeException)) ++ "\nSTACKTRACE\n" ++ (show stack)))

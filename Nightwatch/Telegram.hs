@@ -213,13 +213,12 @@ processOutgoingMessages tgOutChan = do
   processOutgoingMessages tgOutChan
 
 
-startTelegramBot :: Aria2Channel -> TelegramOutgoingChannel -> IO ()
-startTelegramBot aria2Chan tgOutChan = do
+startTelegramBot :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
+startTelegramBot pool aria2Chan tgOutChan = do
   tgIncomingChan <- newChan
-  forkIO $ forever $ void (runDb $ processIncomingMessages tgIncomingChan aria2Chan) `catch` (\e -> putStrLn $ "ERROR IN processIncomingMessages: " ++ (show (e :: Control.Exception.SomeException)))
-  forkIO $ forever $ void (doPollLoop tgIncomingChan =<< getLastUpdateId) `catch` (\e -> putStrLn $ "ERROR IN doPollLoop: " ++ (show (e :: Control.Exception.SomeException)))
-  forkIO $ forever $ void (processOutgoingMessages tgOutChan) `catch` (\e -> putStrLn $ "ERROR IN processOutgoingMessages: " ++ (show (e :: Control.Exception.SomeException)))
+  forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (runDb pool $ processIncomingMessages tgIncomingChan aria2Chan)
+  forkIO $ forever $ logAllExceptions "Error in doPollLoop: " (doPollLoop tgIncomingChan =<< getLastUpdateId)
+  forkIO $ forever $ logAllExceptions "Error in processOutgoingMessages:" (processOutgoingMessages tgOutChan)
   return ()
 
-startAria2 = do
-  forkIO $ forever $ ensureAria2Running
+startAria2 = forkIO $ forever  ensureAria2Running
