@@ -163,8 +163,8 @@ handleAria2Response pool tgOutChan responseId msg aria2Log = do
         Just tgramLog -> do
           let nwCommand = (telegramLogNightwatchCommand tgramLog)
           case nwCommand of
-            InvalidCommand -> putStrLn $ "ERROR: Very strange, how did an InvalidCommand get converted into an Aria2Log in the first place"
-            DownloadCommand url -> handleAddUriResponse tgramLog aria2Log msg
+            Just InvalidCommand -> putStrLn $ "ERROR: Very strange, how did an InvalidCommand get converted into an Aria2Log in the first place"
+            Just (DownloadCommand url) -> handleAddUriResponse tgramLog aria2Log msg
             _ -> putStrLn $ "Have not implemented handling of such responses: (responseId, request)=" ++ show (responseId, nwCommand)
 
 
@@ -175,11 +175,11 @@ handleAria2Response pool tgOutChan responseId msg aria2Log = do
       case (rpcResponse >>= result) of
         Nothing -> putStrLn $ "Error in parsing addUri response. Ignoring=" ++ (show msg)
         Just AddUriResult{addUriGid=gid} -> do
-          (userEntity, (DownloadCommand url)) <- userAndCommand tgramLog
+          (userEntity, Just (DownloadCommand url)) <- userAndCommand tgramLog
           runDb pool $ createDownload url gid responseId (entityKey userEntity)
           writeChan tgOutChan TelegramOutgoingMessage{tg_chat_id=(telegramLogTgramChatId tgramLog), Ty.message=(T.pack $ "Download GID " ++ (show gid))}
 
-    userAndCommand :: TelegramLog -> IO ((Entity User, NightwatchCommand))
+    userAndCommand :: TelegramLog -> IO ((Entity User, Maybe NightwatchCommand))
     userAndCommand tgramLog = do
       userEntity <- (runDb pool $ fetchUserByTelegramUserId $ telegramLogTgramUserId tgramLog)
       case userEntity of

@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..), AuthNightwatchCommand(..)) where
-import Control.Lens
+import Control.Lens hiding(from)
 import Network.Wreq
 import Data.Aeson
 import Data.Aeson.Types
@@ -39,14 +39,14 @@ botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
 apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
 ariaRPCPort = 9999
 ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/rpc"
-aria2Command = "./aria2-1.19.3/bin/aria2c"
+aria2Command = "aria2c"
 aria2DownloadDir = "./downloads"
 aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
 
 
-parseIncomingMessage :: Maybe String -> NightwatchCommand
+parseIncomingMessage :: Maybe TgramMsgText -> NightwatchCommand
 parseIncomingMessage Nothing = InvalidCommand
-parseIncomingMessage (Just inp)
+parseIncomingMessage (Just (TgramMsgText inp))
   | length matches == 0 = InvalidCommand
   | (head matches) == "download" = DownloadCommand $ URL (head $ tail matches)
   | (head matches) == "pause" = PauseCommand $ Aria2Gid (head $ tail matches)
@@ -96,7 +96,7 @@ data Message = Message {
   from :: User,
   date :: Integer,
   chat :: Chat,
-  text :: Maybe String,
+  text :: Maybe TgramMsgText,
   forward_from :: Maybe User,
   forward_date :: Maybe Integer,
   reply_to_message :: Maybe Message
@@ -165,16 +165,23 @@ doPollLoop tgIncomingChan lastUpdateId = do
 
 -- TODO: these seems like a very crappy way to write this function. Almost
 -- every funcation call, apart from authenticateCommand, is liftIO-ed.
-processIncomingMessages :: Chan Update -> Aria2Channel -> NwApp ()
-processIncomingMessages tgIncomingChan aria2Chan = do
-  liftIO $ putStrLn "STARTING processIncomingMessages"
-  update <- liftIO $ readChan tgIncomingChan
-  nwCommand <- authenticateCommand $ message update
-  liftIO $ putStrLn $ "nwCommand received: " ++ (show nwCommand)
-  liftIO $ case (command nwCommand) of
-    (DownloadCommand url) -> writeChan aria2Chan nwCommand
-    _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message="What language, dost thou speaketh? Command me with: download <url>"} 
-  processIncomingMessages tgIncomingChan aria2Chan
+processIncomingMessages :: ConnectionPool -> Chan Update -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
+processIncomingMessages pool tgIncomingChan aria2Chan tgOutChan = forever $ do
+  putStrLn "STARTING processIncomingMessages"
+  update <- readChan tgIncomingChan
+  nwCommand <- runDb pool $ authenticateCommand $ message update
+  putStrLn $ "nwCommand received: " ++ (show nwCommand)
+  case nwCommand of
+    UnauthenticatedCommand -> sendUsageInstructions $ chat_id $ chat $ message update
+    _ -> case (command nwCommand) of
+      (DownloadCommand url) -> do
+--createTelegramLog :: TgramUserId -> TgramChatId -> Maybe TgramMsgText -> Maybe NightwatchCommand -> NwApp (Entity TelegramLog)
+        runDb pool $ createTelegramLog (user_id $ from $ message update) (chat_id $ chat $ message update) (text $ message update) (Just (command nwCommand))
+        writeChan aria2Chan nwCommand
+      _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message="What language, dost thou speaketh? Command me with: download <url>"} 
+  where
+    sendUsageInstructions :: TgramChatId -> IO ()
+    sendUsageInstructions chatId = writeChan tgOutChan TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message="Hey, you aren't an authenticated user. The Nightwatch will kill you."}
 
 --sendCannedResponse :: Chan Update -> IO ()
 --sendCannedResponse tgIncomingChan = do
@@ -216,7 +223,7 @@ processOutgoingMessages tgOutChan = do
 startTelegramBot :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
 startTelegramBot pool aria2Chan tgOutChan = do
   tgIncomingChan <- newChan
-  forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (runDb pool $ processIncomingMessages tgIncomingChan aria2Chan)
+  forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan aria2Chan tgOutChan)
   forkIO $ forever $ logAllExceptions "Error in doPollLoop: " (doPollLoop tgIncomingChan =<< getLastUpdateId)
   forkIO $ forever $ logAllExceptions "Error in processOutgoingMessages:" (processOutgoingMessages tgOutChan)
   return ()

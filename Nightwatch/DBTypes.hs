@@ -42,6 +42,7 @@ module Nightwatch.DBTypes(User(..)
   ,authenticateChat
   ,fetchTelegramLogById
   ,fetchUserByTelegramUserId
+  ,createTelegramLog
   ,SqlPersistM
   ,NwApp(..)
   ,Entity(..)
@@ -91,7 +92,7 @@ TelegramLog
   tgramUserId TgramUserId
   tgramChatId TgramChatId
   tgramMsgText TgramMsgText Maybe
-  nightwatchCommand NightwatchCommand
+  nightwatchCommand NightwatchCommand Maybe
   createdAt UTCTime
   updatedAt UTCTime
   deriving Show
@@ -200,3 +201,6 @@ unMkRequestId x = unSqlBackendKey $ unAria2LogKey x
 
 -- SqlPersistT (NoLoggingT (ResourceT IO))
 -- ReaderT SqlBackend (NoLoggingT (ResourceT IO))
+
+createTelegramLog :: TgramUserId -> TgramChatId -> Maybe TgramMsgText -> Maybe NightwatchCommand -> NwApp (Entity TelegramLog)
+createTelegramLog tgramUserId tgramChatId msg nwCommand = (liftIO getCurrentTime) >>= (\time -> insertEntity TelegramLog{telegramLogTgramUserId=tgramUserId, telegramLogTgramChatId=tgramChatId, telegramLogTgramMsgText=msg, telegramLogNightwatchCommand=nwCommand, telegramLogCreatedAt=time, telegramLogUpdatedAt=time})
