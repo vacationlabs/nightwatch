@@ -57,13 +57,13 @@ parseIncomingMessage (Just inp)
 
 -- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
 -- authenticated in the past
-authenticateCommand :: Message -> SqlPersistM (AuthNightwatchCommand)
+authenticateCommand :: Message -> NwApp (AuthNightwatchCommand)
 authenticateCommand msg = do
-  let chatId = chat_id $ chat $ msg
+  let chatId = chat_id $ chat msg
   user <- DB.authenticateChat chatId
   case user of
     Nothing -> return UnauthenticatedCommand
-    Just u -> return $ AuthNightwatchCommand {command=(parseIncomingMessage $ text msg), userId=(entityKey u), DB.chatId=chatId}
+    Just u -> return AuthNightwatchCommand{command=(parseIncomingMessage $ text msg), userId=(entityKey u), DB.chatId=chatId}
 
 data User = User {
   user_id :: TgramUserId,
@@ -165,7 +165,7 @@ doPollLoop tgIncomingChan lastUpdateId = do
 
 -- TODO: these seems like a very crappy way to write this function. Almost
 -- every funcation call, apart from authenticateCommand, is liftIO-ed.
-processIncomingMessages :: Chan Update -> Aria2Channel -> SqlPersistM ()
+processIncomingMessages :: Chan Update -> Aria2Channel -> NwApp ()
 processIncomingMessages tgIncomingChan aria2Chan = do
   liftIO $ putStrLn "STARTING processIncomingMessages"
   update <- liftIO $ readChan tgIncomingChan

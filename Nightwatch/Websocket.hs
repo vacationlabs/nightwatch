@@ -23,7 +23,7 @@ import qualified Data.Text.Lazy as TL
 import Nightwatch.DBTypes as DB
 import Text.Read (readMaybe)
 import Control.Monad.IO.Class  (liftIO, MonadIO)
-
+import Database.Persist.Sql (transactionSave)
 
 newtype Aria2MethodName = Aria2MethodName String deriving (Show, Eq)
 -- type OutstandingRpcRequest = (aria2LogUserId, AuthNightwatchCommand)
@@ -95,13 +95,15 @@ instance FromJSON AddUriResult where
 -- remove ==> GID (String)
 -- tellStatus ==> Key-value Pair String:String for most of the cases except 'files', which is an array of key-value pairs
 -- unpause ==> GID (String
-jsonRpcRequest :: (ToJSON params) => WS.Connection -> Aria2MethodName -> Aria2LogId -> params -> IO (BL.ByteString)
-jsonRpcRequest conn method request_id request = do
-  let (Aria2MethodName mname)  = method
-  let x = encode JsonRpcRequest{request_id=(show $ unMkRequestId request_id), method=mname, params=request}
-  putStrLn $ "===> SENDING TO Aria2: " ++ (show x)
-  WS.sendTextData conn $ x
-  return x
+
+
+-- jsonRpcRequest :: (ToJSON params) => WS.Connection -> Aria2MethodName -> Aria2LogId -> params -> IO (BL.ByteString)
+-- jsonRpcRequest conn method request_id request = do
+--   let (Aria2MethodName mname)  = method
+--   let x = 
+--   putStrLn $ "===> SENDING TO Aria2: " ++ (show x)
+--   WS.sendTextData conn $ x
+--   return x
 
 aria2WebsocketReceiver :: ConnectionPool -> TelegramOutgoingChannel -> WS.Connection -> IO ()
 aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error in aria2WebsocketReceiver: " $ do
@@ -116,15 +118,16 @@ aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error i
 
   where
     aria2WebsocketReceiver_ :: BL.ByteString -> Integer -> Object -> IO ()
-    aria2WebsocketReceiver_ msg requestId obj = runDb pool $ do
+    aria2WebsocketReceiver_ msg requestId obj = do
       let k = mkRequestId requestId
-      aria2Log <- (fetchAria2LogById k)
+      aria2Log <- runDb pool $ fetchAria2LogById k
+      putStrLn $ "Received response to requestId " ++ (show requestId) ++ ". Retrieved log from the DB=" ++ (show aria2Log)
       case aria2Log of
-        Nothing -> liftIO $ putStrLn $ "Could not find Aria2Log with ID=" ++ (show requestId)
+        Nothing -> putStrLn $ "Could not find Aria2Log with ID=" ++ (show requestId)
         Just l -> do
-          updateAria2Log k l{aria2LogResponse=(Just $ BL.unpack msg)}
-          liftIO $ handleAria2Response pool tgOutChan k msg l
-          liftIO $ putStrLn $ "Received response to requestId " ++ (show requestId) ++ " and handled successfully."
+          runDb pool $ updateAria2Log k l{aria2LogResponse=(Just $ BL.unpack msg)}
+          handleAria2Response pool tgOutChan k msg l
+          putStrLn $ "Received response to requestId " ++ (show requestId) ++ " and handled successfully."
 
 valueToString :: Value -> String
 valueToString value = case (fromJSON value :: Result String) of
@@ -183,29 +186,27 @@ handleAria2Response pool tgOutChan responseId msg aria2Log = do
         Nothing -> error $ "Could not find VL User against TelegramLog=" ++ (show tgramLog)
         Just userEntity -> return (userEntity, (telegramLogNightwatchCommand tgramLog))
 
-sendNightwatchCommand :: WS.Connection -> Aria2LogId -> AuthNightwatchCommand -> IO (BL.ByteString)
-sendNightwatchCommand conn requestId authNwCommand = do
-  jsonRequest <- case (command authNwCommand) of
-                  DownloadCommand url -> jsonRpcRequest conn (Aria2MethodName "aria2.addUri") requestId [[url]]
-                  _ -> error "Not implemented yet"
-  return jsonRequest
-  -- TODO: we need to figure out how to get the telegramLogId here.
+prepareJsonRpcRequest :: Aria2LogId -> AuthNightwatchCommand -> BL.ByteString
+prepareJsonRpcRequest requestId authNwCommand = case (command authNwCommand) of
+  DownloadCommand url -> prepareJsonRpcRequest_ "aria2.addUri" [[url]]
+  _ -> error "Not implemented yet"
+  where
+    prepareJsonRpcRequest_ :: (ToJSON param) => String -> param -> BL.ByteString
+    prepareJsonRpcRequest_ method params = encode JsonRpcRequest{request_id=(show $ unMkRequestId requestId), method=method, params=params}
+
+   -- TODO: we need to figure out how to get the telegramLogId here.
   -- createAria2Log requestId (T.unpack jsonRequest) Nothing (userId authNwCommand)
 
 aria2WebsocketSender :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel ->  WS.Connection -> IO ()
 aria2WebsocketSender pool aria2Chan tgOutChan conn = forever $ logAllExceptions "Error in aria2WebsocketSender" $ do
   authNwCommand <- (readChan aria2Chan)
   putStrLn $ "Nightwatch command received:" ++ (show authNwCommand) ++ " Sending to Aria2 and logging to DB"
-  requestId <- runDb pool nextAria2LogId
-  -- TODO: We're making a network call here. There should be a some sort of error handling...
-  -- TODO: we need to figure out how to get the telegramLogId here.
-  jsonRequest <- (sendNightwatchCommand conn requestId authNwCommand)
   runDb pool $ do
-    aria2Log <- fetchAria2LogById requestId
-    case aria2Log of
-      Nothing -> error $ "ERROR: Super-weirdness / just got this aria2LogId from the DB and now it's mossing=" ++ (show requestId)
-      Just aria2Log -> updateAria2Log requestId aria2Log{aria2LogRequest=(Just $ BL.unpack jsonRequest), aria2LogUserId=(Just $ userId authNwCommand)}
-
+    requestId <- nextAria2LogId
+    let jsonRequest = prepareJsonRpcRequest requestId authNwCommand
+    logAria2Request requestId (Just $ BL.unpack jsonRequest) (Just $ userId authNwCommand)
+    transactionSave
+    liftIO $ WS.sendTextData conn jsonRequest
 
 aria2WebsocketClient :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> WS.ClientApp ()
 aria2WebsocketClient pool aria2Chan tgOutChan conn = do
