@@ -32,6 +32,7 @@ import qualified Nightwatch.Types as Ty(message)
 import Nightwatch.DBTypes hiding (message, chatId, User(..))
 import qualified Nightwatch.DBTypes as DB (message, chatId, User(..), authenticateChat)
 import Control.Monad.IO.Class  (liftIO, MonadIO)
+import Nightwatch.TelegramTypes
 
 type Resp = Response TelegramResponse
 
@@ -55,71 +56,13 @@ parseIncomingMessage (Just (TgramMsgText inp))
   | otherwise = InvalidCommand
   where (_, _, _, matches) = ((inp :: String) =~ ("^(download|pause|cancel|status)[ \t\r\n\v\f]+(.*)" :: String) :: (String, String, String, [String]))
 
--- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
--- authenticated in the past
-authenticateCommand :: Message -> NwApp (AuthNightwatchCommand)
-authenticateCommand msg = do
-  let chatId = chat_id $ chat msg
-  user <- DB.authenticateChat chatId
-  case user of
-    Nothing -> return UnauthenticatedCommand
-    Just u -> return AuthNightwatchCommand{command=(parseIncomingMessage $ text msg), userId=(entityKey u), DB.chatId=chatId}
-
-data User = User {
-  user_id :: TgramUserId,
-  user_first_name :: TgramFirstName,
-  user_last_name :: Maybe TgramLastName,
-  user_username :: Maybe TgramUsername
-} deriving (Show, Generic)
-
-instance ToJSON User
-instance FromJSON User where
-  parseJSON = genericParseJSON defaultOptions {
-    fieldLabelModifier = removePrefix "user_"
-  }
-
-data Chat = Chat {
-  chat_id :: TgramChatId
-  --username :: Maybe String,
-  --first_name :: Maybe String,
-  --last_name :: Maybe String
-} deriving (Show, Generic)
-
-instance ToJSON Chat
-instance FromJSON Chat where 
-  parseJSON = genericParseJSON defaultOptions {
-    fieldLabelModifier = removePrefix "chat_"
-  }
-
-data Message = Message {
-  message_id :: Int,
-  from :: User,
-  date :: Integer,
-  chat :: Chat,
-  text :: Maybe TgramMsgText,
-  forward_from :: Maybe User,
-  forward_date :: Maybe Integer,
-  reply_to_message :: Maybe Message
-} deriving (Show, Generic)
-
-instance FromJSON Message
-instance ToJSON Message
-
-data Update = Update {
-  update_id :: Integer,
-  message :: Message
-} deriving (Show, Generic)
-
-instance FromJSON Update
-instance ToJSON Update
-
-data TelegramResponse = TelegramResponse {
-  ok :: Bool,
-  result :: [Update]
-} deriving (Show, Generic)
-
-instance FromJSON TelegramResponse
-instance ToJSON TelegramResponse
+-- authenticateCommand :: Message -> NwApp (AuthNightwatchCommand)
+-- authenticateCommand msg = do
+--   let chatId = chat_id $ chat msg
+--   user <- DB.authenticateChat chatId
+--   case user of
+--     Nothing -> return UnauthenticatedCommand
+--     Just u -> return AuthNightwatchCommand{command=(parseIncomingMessage $ text msg), userId=(entityKey u), DB.chatId=chatId}
 
 getUpdates :: (Num a, Show a) => Maybe a -> IO (Response BL.ByteString)
 getUpdates Nothing = getUpdates (Just 0)
@@ -163,25 +106,20 @@ doPollLoop tgIncomingChan lastUpdateId = do
   writeList2Chan tgIncomingChan incomingUpdates
   doPollLoop tgIncomingChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
 
--- TODO: these seems like a very crappy way to write this function. Almost
--- every funcation call, apart from authenticateCommand, is liftIO-ed.
-processIncomingMessages :: ConnectionPool -> Chan Update -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
-processIncomingMessages pool tgIncomingChan aria2Chan tgOutChan = forever $ do
+processIncomingMessages :: ConnectionPool -> Chan Update -> Aria2Channel -> IO ()
+processIncomingMessages pool tgIncomingChan aria2Chan = forever $ do
   putStrLn "STARTING processIncomingMessages"
   update <- readChan tgIncomingChan
-  nwCommand <- runDb pool $ authenticateCommand $ message update
-  putStrLn $ "nwCommand received: " ++ (show nwCommand)
-  case nwCommand of
-    UnauthenticatedCommand -> sendUsageInstructions $ chat_id $ chat $ message update
-    _ -> case (command nwCommand) of
-      (DownloadCommand url) -> do
---createTelegramLog :: TgramUserId -> TgramChatId -> Maybe TgramMsgText -> Maybe NightwatchCommand -> NwApp (Entity TelegramLog)
-        runDb pool $ createTelegramLog (user_id $ from $ message update) (chat_id $ chat $ message update) (text $ message update) (Just (command nwCommand))
-        writeChan aria2Chan nwCommand
-      _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message="What language, dost thou speaketh? Command me with: download <url>"} 
-  where
-    sendUsageInstructions :: TgramChatId -> IO ()
-    sendUsageInstructions chatId = writeChan tgOutChan TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message="Hey, you aren't an authenticated user. The Nightwatch will kill you."}
+  let msg = message update
+  let chatId = chat_id $ chat $ msg
+  user <- runDb pool $ DB.authenticateChat chatId
+  case user of
+    Nothing -> sendMessage TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText "Cannot process command. You are not an authenticated user.")}
+    Just userE -> do
+      let nwCmd = parseIncomingMessage (text msg)
+      case nwCmd of
+        (DownloadCommand url) -> (runDb pool $ logIncomingTelegramMessage msg  (Just $ entityKey userE) (Just nwCmd)) >>= (\logE -> writeChan aria2Chan AuthNightwatchCommand{command=nwCmd, userId=(entityKey userE), DB.chatId=chatId, logId=(entityKey logE)})
+        _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")} 
 
 --sendCannedResponse :: Chan Update -> IO ()
 --sendCannedResponse tgIncomingChan = do
@@ -223,7 +161,11 @@ processOutgoingMessages tgOutChan = do
 startTelegramBot :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
 startTelegramBot pool aria2Chan tgOutChan = do
   tgIncomingChan <- newChan
+<<<<<<< e2de19fe359cf84b21c4d470f5ceb3e3636a3627
   forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan aria2Chan tgOutChan)
+=======
+  forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan aria2Chan)
+>>>>>>> FINALLY got it to work with Sqlite datbase and completely rearchitected approach
   forkIO $ forever $ logAllExceptions "Error in doPollLoop: " (doPollLoop tgIncomingChan =<< getLastUpdateId)
   forkIO $ forever $ logAllExceptions "Error in processOutgoingMessages:" (processOutgoingMessages tgOutChan)
   return ()

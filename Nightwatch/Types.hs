@@ -22,6 +22,8 @@ module Nightwatch.Types (NightwatchCommand(..)
   ,TgramChatId(..)
   ,removePrefix
   ,logAllExceptions
+  ,Aria2RequestId
+  ,nextRequestId
   ) where
 
 import qualified Data.Text           as T
@@ -38,6 +40,8 @@ import Data.List (isPrefixOf, drop)
 import qualified GHC.Stack as Stk
 import Data.Functor (void)
 import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
+import Data.UUID
+import qualified Data.UUID.V1 as UUIDv1
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
@@ -47,11 +51,13 @@ instance ToJSON URL
 instance nToJSON Aria2Gid
 instance FromJSON Aria2Gid
 
+type Aria2RequestId = String
+
 newtype TgramUserId = TgramUserId Integer deriving (Show, Eq, Generic, Read)
 newtype TgramFirstName = TgramFirstName String deriving (Show, Eq, Generic, Read)
 newtype TgramLastName = TgramLastName String deriving (Show, Eq, Generic, Read)
 newtype TgramUsername = TgramUsername String deriving (Show, Eq, Generic, Read)
-newtype TgramMsgText = TgramMsgText String deriving (Show, Eq, Generic, Read)
+newtype TgramMsgText = TgramMsgText String deriving (Show, Eq, Generic, Read, W.FormValue)
 newtype TgramChatId = TgramChatId Integer deriving (Show, Eq, Generic, Read, W.FormValue)
 instance FromJSON TgramUserId
 instance FromJSON TgramFirstName
@@ -70,7 +76,7 @@ data NightwatchCommand = InvalidCommand | DownloadCommand URL | PauseCommand Ari
 
 data TelegramOutgoingMessage = TelegramOutgoingMessage {
   tg_chat_id :: TgramChatId,
-  message :: T.Text
+  message :: TgramMsgText
 } deriving (Show, Eq)
 
 type TelegramOutgoingChannel = Chan TelegramOutgoingMessage
@@ -117,7 +123,7 @@ derivePersistField "TgramMsgText"
 -- derivePersistField "URL"
 -- derivePersistField "Aria2Gid"
 derivePersistField "NightwatchCommand"
--- derivePersistField "Aria2RequestId"
+derivePersistField "UUID"
 
 removePrefix :: String -> String -> String
 removePrefix prefix input 
@@ -125,3 +131,14 @@ removePrefix prefix input
   | otherwise = input
 
 logAllExceptions logMarker fn = (void fn) `catch` (\e -> Stk.currentCallStack >>= (\stack -> putStrLn $ logMarker ++ (show (e :: Control.Exception.SomeException)) ++ "\nSTACKTRACE\n" ++ (show stack)))
+
+-- TODO: This has the potential of going into an infinite loop. Break after
+-- N-tries
+nextRequestId :: IO Aria2RequestId
+nextRequestId = UUIDv1.nextUUID >>= \uuid ->
+  case uuid of
+    Nothing -> nextRequestId
+    Just uuid -> return $ toString uuid
+
+-- parseRequestId :: String -> Maybe Aria2RequestId
+-- parseRequestId = Just . id

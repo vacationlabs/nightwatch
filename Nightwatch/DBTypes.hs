@@ -9,8 +9,6 @@
 {-# LANGUAGE TypeFamilies               #-}
 
 module Nightwatch.DBTypes(User(..)
-  ,TelegramLog(..)
-  ,Aria2Log(..)
   ,Download(..)
   ,AuthNightwatchCommand(..)
   ,Aria2Channel(..)
@@ -27,29 +25,28 @@ module Nightwatch.DBTypes(User(..)
   ,TgramMsgText(..)
   ,TgramChatId(..)
   ,UserId(..)
-  ,TelegramLogId(..)
-  ,Aria2LogId(..)
   ,Key(..)
   ,DownloadId(..)
   ,ConnectionPool
   ,createUser
-  ,updateAria2Log
-  ,logAria2Request
-  ,nextAria2LogId
   ,createDownload
   ,fetchDownloadByGid
-  ,fetchAria2LogById
   ,authenticateChat
-  ,fetchTelegramLogById
   ,fetchUserByTelegramUserId
-  ,createTelegramLog
+  ,fetchUserById
+  ,fetchLogById
+  ,fetchLogByRequestId
+  ,updateWithAria2Request
+  ,updateWithAria2Response
+  ,logIncomingTelegramMessage
+  ,updateWithTgramOutgoingMsg
   ,SqlPersistM
   ,NwApp(..)
   ,Entity(..)
   ,runDb
   ,runMigrations
-  ,mkRequestId
-  ,unMkRequestId
+  ,Log(..)
+  ,LogId(..)
   ) where
 import Control.Monad.IO.Class  (liftIO, MonadIO)
 import Database.Persist
@@ -61,6 +58,7 @@ import Control.Concurrent.Chan(Chan)
 import qualified Data.Text as T
 import Control.Monad.Trans.Resource (runResourceT)
 import Control.Monad.Logger (runStderrLoggingT)
+import qualified Nightwatch.TelegramTypes as TT
 
 -- import Nightwatch.DBInternal
 
@@ -88,20 +86,16 @@ User
   updatedAt UTCTime
   deriving Show
 
-TelegramLog
-  tgramUserId TgramUserId
-  tgramChatId TgramChatId
-  tgramMsgText TgramMsgText Maybe
-  nightwatchCommand NightwatchCommand Maybe
-  createdAt UTCTime
-  updatedAt UTCTime
-  deriving Show
-
-Aria2Log
-  request String Maybe
-  response String Maybe
-  telegramLogId TelegramLogId Maybe
+Log
+  requestId Aria2RequestId Maybe
   userId UserId Maybe
+  tgramUserId TgramUserId Maybe
+  tgramChatId TgramChatId Maybe
+  tgramIncomingText TgramMsgText Maybe
+  tgramOutgoingText TgramMsgText Maybe
+  nwCmd NightwatchCommand Maybe
+  aria2Request String Maybe
+  aria2Response String Maybe
   createdAt UTCTime
   updatedAt UTCTime
   deriving Show
@@ -110,7 +104,7 @@ Download
   userId UserId
   gid Aria2Gid
   url URL
-  aria2LogId Aria2LogId
+  logId LogId
   createdAt UTCTime
   updatedAt UTCTime
   deriving Show
@@ -121,10 +115,11 @@ Download
 -- instance Timestamped Aria2Log
 -- instance Timestamped Download
 
-data AuthNightwatchCommand = UnauthenticatedCommand | AuthNightwatchCommand {
+data AuthNightwatchCommand = AuthNightwatchCommand {
   command :: NightwatchCommand,
   userId :: UserId,
-  chatId :: TgramChatId
+  chatId :: TgramChatId,
+  logId :: LogId
 } deriving (Show, Eq)
 
 type Aria2ChannelMessage = AuthNightwatchCommand
@@ -134,52 +129,26 @@ type NwApp = SqlPersistT IO
 createUser :: String -> Maybe String -> Maybe TgramUserId -> Maybe TgramUsername -> Maybe TgramChatId -> NwApp (Entity User)
 createUser email name tgramUserId tgramUsername tgramChatId = (liftIO getCurrentTime) >>= (\time -> insertEntity User{userName=name, userEmail=email, userTgramUserId=tgramUserId, userTgramUsername=tgramUsername, userTgramChatId=tgramChatId, userCreatedAt=time, userUpdatedAt=time})
 
--- createAria2Log :: String -> Maybe TelegramLogId -> Maybe UserId -> NwApp (Entity Aria2Log)
- -- createAria2Log request telegramLogId userId = (liftIO getCurrentTime) >>= (\time -> insecreateEntity $ Aria2Log{aria2LogRequest=(Just request), aria2LogTelegramLogId=telegramLogId, aria2LogUserId=userId, aria2LogCreatedAt=time, aria2LogUpdatedAt=time, aria2LogResponse=Nothing})
+-- createAria2RequestLog :: Maybe String -> Maybe UserId -> NwApp ()
+-- createAria2RequestLog request userId = (liftIO getCurrentTime) >>= (\time -> update logId [ LogAria2Request =. request, LogUserId =. userId ])
 
-logAria2Request :: Aria2LogId -> Maybe String -> Maybe UserId -> NwApp ()
-logAria2Request aria2LogId request userId = (liftIO getCurrentTime) >>= (\time -> update aria2LogId [ Aria2LogRequest =. request, Aria2LogUserId =. userId ])
-
-updateAria2Log :: Aria2LogId -> Aria2Log -> NwApp (Aria2Log)
-updateAria2Log aria2LogId aria2Log = do 
-  time <- (liftIO getCurrentTime) 
-  let newLog = aria2Log{aria2LogUpdatedAt=time}
-  repsert aria2LogId newLog
-  return newLog
-
--- recordAria2Response :: Aria2RequestId -> String -> NwApp ()
--- recordAria2Response requestId response = (liftIO getCurrentTime) >>= (\time -> updateWhere [Aria2LogRequestId ==. (Just requestId)] [Aria2LogResponse =. (Just response), Aria2LogUpdatedAt =. time])
-
-createDownload :: URL -> Aria2Gid -> Aria2LogId -> UserId -> NwApp (Entity Download)
-createDownload url gid logId userId = (liftIO getCurrentTime) >>= (\time -> insertEntity Download{downloadUrl=url, downloadGid=gid, downloadAria2LogId=logId, downloadUserId=userId, downloadCreatedAt=time, downloadUpdatedAt=time})
+createDownload :: URL -> Aria2Gid -> LogId -> UserId -> NwApp (Entity Download)
+createDownload url gid logId userId = (liftIO getCurrentTime) >>= (\time -> insertEntity Download{downloadUrl=url, downloadGid=gid, downloadLogId=logId, downloadUserId=userId, downloadCreatedAt=time, downloadUpdatedAt=time})
 
 fetchDownloadByGid :: Aria2Gid -> NwApp (Maybe (Entity Download))
 fetchDownloadByGid gid = selectFirst [ DownloadGid ==. gid ] []
 
-fetchAria2LogById :: Aria2LogId -> NwApp (Maybe Aria2Log)
-fetchAria2LogById requestId = get requestId
+fetchLogById :: LogId -> NwApp (Maybe Log)
+fetchLogById requestId = get requestId
 
-fetchTelegramLogById :: TelegramLogId -> NwApp (Maybe TelegramLog)
-fetchTelegramLogById tgramLogId = get tgramLogId
-
-nextAria2LogId :: NwApp (Aria2LogId)
-nextAria2LogId = (liftIO getCurrentTime) >>= (\time -> insert Aria2Log{aria2LogRequest=Nothing, aria2LogResponse=Nothing, aria2LogTelegramLogId=Nothing, aria2LogUserId=Nothing, aria2LogCreatedAt=time, aria2LogUpdatedAt=time})
+fetchLogByRequestId :: Aria2RequestId -> NwApp (Maybe (Entity Log))
+fetchLogByRequestId requestId = selectFirst [ LogRequestId ==. (Just requestId) ] []
 
 fetchUserByTelegramUserId :: TgramUserId -> NwApp (Maybe (Entity User))
 fetchUserByTelegramUserId tgramUserId = selectFirst [ UserTgramUserId ==. (Just tgramUserId) ] []
 
--- fetchLargestAria2RequestId :: NwApp (Aria2RequestId)
--- fetchLargestAria2RequestId = do 
---   res <- runQuery
---   return $ if (length res) == 0 
---     then (Aria2RequestId 0)
---     else (unSingle (head res))
---   where 
---     runQuery :: NwApp [Single Aria2RequestId]
---     runQuery = rawSql "select max(request_id) from aria2_log" []
-
--- incrementAria2RequestId :: Aria2RequestId -> Aria2RequestId
--- incrementAria2RequestId (Aria2RequestId x) = Aria2RequestId $ 1+ x
+fetchUserById :: UserId -> NwApp (Maybe User)
+fetchUserById userId = get userId 
 
 -- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
 -- authenticated in the past
@@ -190,17 +159,25 @@ runDb :: ConnectionPool -> NwApp a -> IO a
 runDb pool operation = runSqlPool operation pool
 
 runMigrations :: ConnectionPool -> IO ()
-runMigrations pool = runDb pool $ runMigration migrateAll
+runMigrations pool = runDb pool $ runMigrationUnsafe migrateAll
 
---mkRequestId :: Integer -> Aria2LogId
-mkRequestId x = Aria2LogKey $ fromIntegral x
-
---unMkRequestId :: Aria2LogId -> Integer
-unMkRequestId x = unSqlBackendKey $ unAria2LogKey x
-
-
--- SqlPersistT (NoLoggingT (ResourceT IO))
+-- Sqlpersistti (NoLoggingT (ResourceT IO))
 -- ReaderT SqlBackend (NoLoggingT (ResourceT IO))
 
-createTelegramLog :: TgramUserId -> TgramChatId -> Maybe TgramMsgText -> Maybe NightwatchCommand -> NwApp (Entity TelegramLog)
-createTelegramLog tgramUserId tgramChatId msg nwCommand = (liftIO getCurrentTime) >>= (\time -> insertEntity TelegramLog{telegramLogTgramUserId=tgramUserId, telegramLogTgramChatId=tgramChatId, telegramLogTgramMsgText=msg, telegramLogNightwatchCommand=nwCommand, telegramLogCreatedAt=time, telegramLogUpdatedAt=time})
+blankLog :: IO Log
+blankLog = getCurrentTime >>= \time -> return Log{logRequestId=Nothing, logUserId=Nothing, logTgramUserId=Nothing, logTgramChatId=Nothing, logTgramIncomingText=Nothing, logTgramOutgoingText=Nothing, logNwCmd=Nothing, logAria2Request=Nothing, logAria2Response=Nothing, logCreatedAt=time, logUpdatedAt=time}
+
+logIncomingTelegramMessage :: TT.Message -> Maybe UserId -> Maybe NightwatchCommand -> NwApp (Entity Log)
+logIncomingTelegramMessage tgramMsg userId nwCmd = (liftIO blankLog) >>= (\log -> insertEntity log{logTgramUserId=(Just $ TT.user_id $ TT.from tgramMsg), logTgramChatId=(Just $ TT.chat_id $ TT.chat tgramMsg), logTgramIncomingText=(TT.text tgramMsg), logNwCmd=nwCmd, logUserId=userId})
+
+updateWithAria2Request :: LogId -> Aria2RequestId -> String -> NwApp ()
+updateWithAria2Request logId requestId req = (liftIO getCurrentTime) >>= (\time -> update logId [ LogRequestId =. (Just requestId), LogAria2Request =. (Just req), LogUpdatedAt =. time ])
+
+updateWithAria2Response :: LogId -> String -> NwApp ()
+updateWithAria2Response requestId r = (liftIO getCurrentTime) >>= (\time -> update requestId [ LogAria2Response =. (Just r), LogUpdatedAt =. time ])
+
+updateWithTgramOutgoingMsg :: LogId -> TelegramOutgoingMessage -> NwApp()
+updateWithTgramOutgoingMsg requestId msg = (liftIO getCurrentTime) >>= (\time -> update requestId [ LogTgramOutgoingText =. (Just $ message msg), LogTgramChatId =. (Just $ tg_chat_id msg), LogUpdatedAt =. time])
+
+logAria2Notification :: String -> NwApp (Entity Log)
+logAria2Notification notif = (liftIO blankLog) >>= (\log -> insertEntity log{logAria2Response=(Just notif)})
