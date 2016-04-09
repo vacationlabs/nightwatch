@@ -40,7 +40,7 @@ botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
 apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
 ariaRPCPort = 9999
 ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/rpc"
-aria2Command = "aria2c"
+aria2Command = "./aria2-1.19.3/bin/aria2c"
 aria2DownloadDir = "./downloads"
 aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
 
@@ -161,11 +161,7 @@ processOutgoingMessages tgOutChan = do
 startTelegramBot :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
 startTelegramBot pool aria2Chan tgOutChan = do
   tgIncomingChan <- newChan
-<<<<<<< e2de19fe359cf84b21c4d470f5ceb3e3636a3627
-  forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan aria2Chan tgOutChan)
-=======
   forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan aria2Chan)
->>>>>>> FINALLY got it to work with Sqlite datbase and completely rearchitected approach
   forkIO $ forever $ logAllExceptions "Error in doPollLoop: " (doPollLoop tgIncomingChan =<< getLastUpdateId)
   forkIO $ forever $ logAllExceptions "Error in processOutgoingMessages:" (processOutgoingMessages tgOutChan)
   return ()

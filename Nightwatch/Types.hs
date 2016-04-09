@@ -48,7 +48,7 @@ import qualified Data.UUID.V1 as UUIDv1
 newtype URL = URL String deriving (Show, Eq, Generic, Read)
 newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read)
 instance ToJSON URL
-instance nToJSON Aria2Gid
+instance ToJSON Aria2Gid
 instance FromJSON Aria2Gid
 
 type Aria2RequestId = String

@@ -64,7 +64,10 @@ data JsonRpcResponse p = JsonRpcResponse {
 -- type AddUriResult = String
 
 instance FromJSON JsonRpcError
-instance (FromJSON p) => FromJSON (JsonRpcResponse p)
+instance (FromJSON p) => FromJSON (JsonRpcResponse p) where
+  parseJSON = genericParseJSON defaultOptions {
+    fieldLabelModifier=(\jsonKey -> if jsonKey=="response_id" then "id" else jsonKey)
+  }
 
 -- instance (FromJSON p) => FromJSON (JsonRpcResponse p) where
 --   parseJSON (Object v) = do
@@ -167,7 +170,9 @@ handleAria2Response pool tgOutChan logId msg aria2Log = do
       putStrLn $ "===> PARSED" ++ (show gid)
       let (DownloadCommand url, userId, chatId) = (fromJust $ logNwCmd aria2Log, fromJust $ logUserId aria2Log, fromJust $ logTgramChatId aria2Log)
       dloadEntity <- runDb pool $ createDownload url gid logId userId
-      writeChan tgOutChan TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download GID " ++ (show $ downloadGid $ entityVal dloadEntity))}
+      let tgMsg = TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download GID " ++ (show $ downloadGid $ entityVal dloadEntity))}
+      runDb pool $ updateWithTgramOutgoingMsg logId tgMsg
+      writeChan tgOutChan  tgMsg
 
 prepareJsonRpcRequest :: Aria2RequestId -> NightwatchCommand -> BL.ByteString
 prepareJsonRpcRequest requestId nwCommand = case nwCommand of
