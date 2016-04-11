@@ -26,6 +26,12 @@ import Control.Monad.IO.Class  (liftIO, MonadIO)
 import Database.Persist.Sql (transactionSave)
 import Data.Maybe (fromJust)
 import Debug.Trace
+import Data.Char(toLower)
+import qualified Data.Aeson.Lens as L
+import qualified Control.Lens as L
+import Control.Monad.Trans.Except
+import Control.Monad.Except
+import Control.Monad.Trans.Maybe
 
 newtype Aria2MethodName = Aria2MethodName String deriving (Show, Eq)
 -- type OutstandingRpcRequest = (aria2LogUserId, AuthNightwatchCommand)
@@ -67,6 +73,18 @@ instance FromJSON JsonRpcError
 instance (FromJSON p) => FromJSON (JsonRpcResponse p) where
   parseJSON = genericParseJSON defaultOptions {
     fieldLabelModifier=(\jsonKey -> if jsonKey=="response_id" then "id" else jsonKey)
+  }
+
+-- let r = "{\"jsonrpc\":\"2.0\",\"params\":[{\"gid\":\"9641d0fc8e4b424c\"}], \"method\":\"aria2.onDownloadStart\"}"
+
+data JsonRpcNotification p = JsonRpcNotification {
+  notifMethod :: String,
+  notifParams :: p
+} deriving (Show, Generic)
+
+instance (FromJSON p) => FromJSON (JsonRpcNotification p) where
+  parseJSON = genericParseJSON defaultOptions {
+    fieldLabelModifier=(removePrefix "notif") . (map toLower)
   }
 
 -- instance (FromJSON p) => FromJSON (JsonRpcResponse p) where
@@ -117,10 +135,10 @@ aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error i
     Nothing -> putStrLn "Received blank ping from Aria2. Ignoring"
     Just obj -> case (HM.lookup "id" obj) of 
       Nothing -> putStrLn $ "RECEIVED NOTIFICATION: " ++ (show obj)
-      Just (String requestId) -> aria2WebsocketReceiver_ msg (T.unpack requestId) obj
+      Just (String requestId) -> websocketResponseReceived_ msg (T.unpack requestId) obj
   where
-    aria2WebsocketReceiver_ :: BL.ByteString -> Aria2RequestId -> Object -> IO ()
-    aria2WebsocketReceiver_ msg requestId obj = do
+    websocketResponseReceived_ :: BL.ByteString -> Aria2RequestId -> Object -> IO ()
+    websocketResponseReceived_ msg requestId obj = do
       logEntity <- runDb pool $ fetchLogByRequestId requestId
       putStrLn $ "Received response to requestId " ++ (show requestId) ++ ". Retrieved log from the DB=" ++ (show logEntity)
       case logEntity of
@@ -129,6 +147,51 @@ aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error i
           runDb pool $ updateWithAria2Response (entityKey l) (BL.unpack msg)
           handleAria2Response pool tgOutChan (entityKey l) msg (entityVal l)
           putStrLn $ "Received response to requestId " ++ (show requestId) ++ " and handled successfully."
+
+    websocketNotificationReceived_ :: BL.ByteString -> Object -> IO ()
+    websocketNotificationReceived_ msg obj = do
+      logE <- runDb pool $ logAria2Notification (BL.unpack msg)
+      case (HM.lookup "method" obj) of
+        Just (String "aria2.onDownloadComplete") -> onDownloadComplete pool tgOutChan msg logE
+        _ -> putStrLn $ "Don't know how to handle this notification. Ignoring=" ++ (show obj)
+
+onDownloadComplete :: ConnectionPool -> TelegramOutgoingChannel -> BL.ByteString -> Entity Log -> ExceptT String IO ()
+onDownloadComplete pool tgOutChan msg logE = do
+  n <- case (eitherDecode msg :: Either String (JsonRpcNotification Value)) of
+    Left s -> throwError s
+    Right n -> return n
+  gid <- maybeToExceptT ("GID not found in response" ++ (show n)) (MaybeT $ return $ n L.^? (L.nth 0) . (L.key "gid"))
+  dloadE <- maybeToExceptT ("Download with this GID not found " ++ (show gid)) (MaybeT $ runDb pool $ fetchDownloadByGid $ Aria2Gid $ valueToString gid)
+  user <- maybeToExceptT ("User with this ID not found " ++ (show $ downloadUserId $ entityVal dloadE)) $ (MaybeT $ runDb pool $ fetchUserById $ downloadUserId $ entityVal dloadE)
+  chatId <- maybeToExceptT ("User does not have telegram chat ID " ++ (show user)) $ (MaybeT $ return $ userTgramChatId user)
+  liftIO $ runDb pool $ logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download completed. GID=" ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl $ entityVal dloadE))} tgOutChan
+
+-- withEitherHandling :: (MonadIO m) => Either String (m a) -> m a
+-- withEitherHandling v = case v of
+--   Left s -> putStrLn $ "ERROR: " ++ (show s)
+--   Right m -> m
+
+-- maybeToEither :: String -> Maybe a -> Either String a
+-- maybeToEither s m = case m of
+--   Nothing -> Left s
+--   Just x -> Right x
+
+
+
+  -- case (eitherDecode msg :: Either String (JsonRpcNotification Value)) of
+  --   Left s -> error s
+  --   Right n -> do
+  --     let (String gid) = fromJust $ n ^? (nth 0) . (key "gid")
+  --     dloadE <- runDb pool $ fetchDownloadByGid $ T.unpack gid
+  --     case dloadE of
+  --       Nothing -> putStrLn $ "Could not find download with GID" ++ (show gid)
+  --       Just dloadE -> do
+  --         userE <- runDb pool $ fetchUserById $ downloadUserId $ entityVal dloadE
+  --         case (userTgramChatId $ entityVal userE) of
+  --           Nothing -> putStrLn $ "User does not have a telegram chat ID, cannot notify. User=" ++ (show userE)
+  --           Just chatId -> runDb pool $ logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, message=(TgramMsgText "Download completed. GID=" ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl entityVal dloadE))} tgOutChan
+ 
+
 
 valueToString :: Value -> String
 valueToString value = case (fromJSON value :: Result String) of

@@ -40,6 +40,8 @@ module Nightwatch.DBTypes(User(..)
   ,updateWithAria2Response
   ,logIncomingTelegramMessage
   ,updateWithTgramOutgoingMsg
+  ,logAria2Notification
+  ,logAndSendTgramMessage
   ,SqlPersistM
   ,NwApp(..)
   ,Entity(..)
@@ -59,6 +61,7 @@ import qualified Data.Text as T
 import Control.Monad.Trans.Resource (runResourceT)
 import Control.Monad.Logger (runStderrLoggingT)
 import qualified Nightwatch.TelegramTypes as TT
+import Control.Concurrent (writeChan)
 
 -- import Nightwatch.DBInternal
 
@@ -148,7 +151,7 @@ fetchUserByTelegramUserId :: TgramUserId -> NwApp (Maybe (Entity User))
 fetchUserByTelegramUserId tgramUserId = selectFirst [ UserTgramUserId ==. (Just tgramUserId) ] []
 
 fetchUserById :: UserId -> NwApp (Maybe User)
-fetchUserById userId = get userId 
+fetchUserById userId = get userId
 
 -- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
 -- authenticated in the past
@@ -181,3 +184,8 @@ updateWithTgramOutgoingMsg requestId msg = (liftIO getCurrentTime) >>= (\time ->
 
 logAria2Notification :: String -> NwApp (Entity Log)
 logAria2Notification notif = (liftIO blankLog) >>= (\log -> insertEntity log{logAria2Response=(Just notif)})
+
+logAndSendTgramMessage :: LogId -> TelegramOutgoingMessage -> TelegramOutgoingChannel -> NwApp()
+logAndSendTgramMessage logId msg tgOutChan = do
+  updateWithTgramOutgoingMsg logId msg
+  liftIO $ writeChan tgOutChan msg
