@@ -134,7 +134,7 @@ aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error i
   case (decode msg :: Maybe Object) of
     Nothing -> putStrLn "Received blank ping from Aria2. Ignoring"
     Just obj -> case (HM.lookup "id" obj) of 
-      Nothing -> putStrLn $ "RECEIVED NOTIFICATION: " ++ (show obj)
+      Nothing -> websocketNotificationReceived_ msg obj 
       Just (String requestId) -> websocketResponseReceived_ msg (T.unpack requestId) obj
   where
     websocketResponseReceived_ :: BL.ByteString -> Aria2RequestId -> Object -> IO ()
@@ -152,17 +152,21 @@ aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error i
     websocketNotificationReceived_ msg obj = do
       logE <- runDb pool $ logAria2Notification (BL.unpack msg)
       case (HM.lookup "method" obj) of
-        Just (String "aria2.onDownloadComplete") -> onDownloadComplete pool tgOutChan msg logE
+        Just (String "aria2.onDownloadComplete") -> do
+          r <- runDb pool $ runExceptT $ onDownloadComplete pool tgOutChan msg logE
+          case (r) of
+            Left s -> putStrLn $ "ERROR: " ++ (show s)
+            Right r -> putStrLn "aria2.onDownloadComplete handled successfully"
         _ -> putStrLn $ "Don't know how to handle this notification. Ignoring=" ++ (show obj)
 
-onDownloadComplete :: ConnectionPool -> TelegramOutgoingChannel -> BL.ByteString -> Entity Log -> ExceptT String IO ()
+onDownloadComplete :: ConnectionPool -> TelegramOutgoingChannel -> BL.ByteString -> Entity Log -> ExceptT String NwApp ()
 onDownloadComplete pool tgOutChan msg logE = do
   n <- case (eitherDecode msg :: Either String (JsonRpcNotification Value)) of
     Left s -> throwError s
     Right n -> return n
-  gid <- maybeToExceptT ("GID not found in response" ++ (show n)) (MaybeT $ return $ n L.^? (L.nth 0) . (L.key "gid"))
-  dloadE <- maybeToExceptT ("Download with this GID not found " ++ (show gid)) (MaybeT $ runDb pool $ fetchDownloadByGid $ Aria2Gid $ valueToString gid)
-  user <- maybeToExceptT ("User with this ID not found " ++ (show $ downloadUserId $ entityVal dloadE)) $ (MaybeT $ runDb pool $ fetchUserById $ downloadUserId $ entityVal dloadE)
+  gid <- maybeToExceptT ("GID not found in response" ++ (show n)) (MaybeT $ return $ (notifParams n) L.^? (L.nth 0) . (L.key "gid"))
+  dloadE <- maybeToExceptT ("Download with this GID not found " ++ (show gid)) (MaybeT $ fetchDownloadByGid $ Aria2Gid $ valueToString gid)
+  user <- maybeToExceptT ("User with this ID not found " ++ (show $ downloadUserId $ entityVal dloadE)) $ (MaybeT $ fetchUserById $ downloadUserId $ entityVal dloadE)
   chatId <- maybeToExceptT ("User does not have telegram chat ID " ++ (show user)) $ (MaybeT $ return $ userTgramChatId user)
   liftIO $ runDb pool $ logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download completed. GID=" ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl $ entityVal dloadE))} tgOutChan
 
