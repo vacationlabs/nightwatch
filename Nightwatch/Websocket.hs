@@ -151,16 +151,17 @@ aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error i
     websocketNotificationReceived_ :: BL.ByteString -> Object -> IO ()
     websocketNotificationReceived_ msg obj = do
       logE <- runDb pool $ logAria2Notification (BL.unpack msg)
-      case (HM.lookup "method" obj) of
-        Just (String "aria2.onDownloadComplete") -> do
-          r <- runDb pool $ runExceptT $ onDownloadComplete pool tgOutChan msg logE
-          case (r) of
-            Left s -> putStrLn $ "ERROR: " ++ (show s)
-            Right r -> putStrLn "aria2.onDownloadComplete handled successfully"
-        _ -> putStrLn $ "Don't know how to handle this notification. Ignoring=" ++ (show obj)
+      let method = (HM.lookup "method" obj)
+      let exceptT = case method of
+            Just (String "aria2.onDownloadComplete") -> onDownloadComplete tgOutChan msg logE
+            _ -> throwError $ "Don't know how to handle this notification. Ignoring=" ++ (show obj)
+      r <- (runDb pool $ runExceptT exceptT)
+      case r of
+        Left s -> putStrLn $ "ERROR: " ++ s
+        Right r -> putStrLn $ "Handled " ++ (show method) ++  "successfully"
 
-onDownloadComplete :: ConnectionPool -> TelegramOutgoingChannel -> BL.ByteString -> Entity Log -> ExceptT String NwApp ()
-onDownloadComplete pool tgOutChan msg logE = do
+onDownloadComplete :: TelegramOutgoingChannel -> BL.ByteString -> Entity Log -> ExceptT String NwApp ()
+onDownloadComplete tgOutChan msg logE = do
   n <- case (eitherDecode msg :: Either String (JsonRpcNotification Value)) of
     Left s -> throwError s
     Right n -> return n
@@ -168,7 +169,7 @@ onDownloadComplete pool tgOutChan msg logE = do
   dloadE <- maybeToExceptT ("Download with this GID not found " ++ (show gid)) (MaybeT $ fetchDownloadByGid $ Aria2Gid $ valueToString gid)
   user <- maybeToExceptT ("User with this ID not found " ++ (show $ downloadUserId $ entityVal dloadE)) $ (MaybeT $ fetchUserById $ downloadUserId $ entityVal dloadE)
   chatId <- maybeToExceptT ("User does not have telegram chat ID " ++ (show user)) $ (MaybeT $ return $ userTgramChatId user)
-  liftIO $ runDb pool $ logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download completed. GID=" ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl $ entityVal dloadE))} tgOutChan
+  lift $ logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download completed. GID=" ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl $ entityVal dloadE))} tgOutChan
 
 -- withEitherHandling :: (MonadIO m) => Either String (m a) -> m a
 -- withEitherHandling v = case v of
