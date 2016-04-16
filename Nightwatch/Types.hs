@@ -45,32 +45,17 @@ import qualified Data.UUID.V1 as UUIDv1
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
-newtype URL = URL String deriving (Show, Eq, Generic, Read)
-newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read)
-instance ToJSON URL
-instance ToJSON Aria2Gid
-instance FromJSON Aria2Gid
+newtype URL = URL String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
+newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
 
 type Aria2RequestId = String
 
-newtype TgramUserId = TgramUserId Integer deriving (Show, Eq, Generic, Read)
-newtype TgramFirstName = TgramFirstName String deriving (Show, Eq, Generic, Read)
-newtype TgramLastName = TgramLastName String deriving (Show, Eq, Generic, Read)
-newtype TgramUsername = TgramUsername String deriving (Show, Eq, Generic, Read)
-newtype TgramMsgText = TgramMsgText String deriving (Show, Eq, Generic, Read, W.FormValue)
-newtype TgramChatId = TgramChatId Integer deriving (Show, Eq, Generic, Read, W.FormValue)
-instance FromJSON TgramUserId
-instance FromJSON TgramFirstName
-instance FromJSON TgramLastName
-instance FromJSON TgramUsername
-instance FromJSON TgramMsgText
-instance FromJSON TgramChatId
-instance ToJSON TgramUserId
-instance ToJSON TgramFirstName
-instance ToJSON TgramLastName
-instance ToJSON TgramUsername
-instance ToJSON TgramMsgText
-instance ToJSON TgramChatId
+newtype TgramUserId = TgramUserId Integer deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
+newtype TgramFirstName = TgramFirstName String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
+newtype TgramLastName = TgramLastName String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
+newtype TgramUsername = TgramUsername String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
+newtype TgramMsgText = TgramMsgText String deriving (Show, Eq, Generic, Read, W.FormValue, FromJSON, ToJSON)
+newtype TgramChatId = TgramChatId Integer deriving (Show, Eq, Generic, Read, W.FormValue, FromJSON, ToJSON)
 
 data NightwatchCommand = InvalidCommand | DownloadCommand URL | PauseCommand Aria2Gid | UnpauseCommand Aria2Gid | StatusCommand Aria2Gid deriving (Show, Eq, Generic, Read)
 

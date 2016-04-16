@@ -117,9 +117,15 @@ processIncomingMessages pool tgIncomingChan aria2Chan = forever $ do
     Nothing -> sendMessage TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText "Cannot process command. You are not an authenticated user.")}
     Just userE -> do
       let nwCmd = parseIncomingMessage (text msg)
+          logTgram :: IO (Entity Log)
+          logTgram = (runDb pool $ logIncomingTelegramMessage msg  (Just $ entityKey userE) (Just nwCmd))
+          sendToAria2 :: Entity Log -> IO ()
+          sendToAria2 logE = writeChan aria2Chan AuthNightwatchCommand{command=nwCmd, userId=(entityKey userE), DB.chatId=chatId, logId=(entityKey logE)}
       case nwCmd of
-        (DownloadCommand url) -> (runDb pool $ logIncomingTelegramMessage msg  (Just $ entityKey userE) (Just nwCmd)) >>= (\logE -> writeChan aria2Chan AuthNightwatchCommand{command=nwCmd, userId=(entityKey userE), DB.chatId=chatId, logId=(entityKey logE)})
-        _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")} 
+        (DownloadCommand url) -> logTgram >>= sendToAria2
+        (StatusCommand gid) -> logTgram >>= sendToAria2
+        _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")}
+
 
 --sendCannedResponse :: Chan Update -> IO ()
 --sendCannedResponse tgIncomingChan = do

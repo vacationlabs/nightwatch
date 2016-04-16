@@ -67,8 +67,6 @@ data JsonRpcResponse p = JsonRpcResponse {
    rpc_error :: Maybe JsonRpcError
 } deriving (Show, Generic)
 
--- type AddUriResult = String
-
 instance FromJSON JsonRpcError
 instance (FromJSON p) => FromJSON (JsonRpcResponse p) where
   parseJSON = genericParseJSON defaultOptions {
@@ -86,6 +84,89 @@ instance (FromJSON p) => FromJSON (JsonRpcNotification p) where
   parseJSON = genericParseJSON defaultOptions {
     fieldLabelModifier=(removePrefix "notif") . (map toLower)
   }
+
+--  let r = "{  \"id\":\"ce0ae9d8-0338-11e6-8001-3c075454c078\",  \"jsonrpc\":\"2.0\",  \"result\":{    \"bitfield\":\"80\",    \"completedLength\":\"12761\",    \"connections\":\"0\",    \"dir\":\"./downloads\",    \"downloadSpeed\":\"0\",    \"errorCode\":\"0\",    \"errorMessage\":\"\",    \"gid\":\"3e51037346ea55b6\",    \"numPieces\":\"1\",    \"pieceLength\":\"1048576\",    \"status\":\"complete\",    \"totalLength\":\"12761\",    \"uploadLength\":\"0\",    \"uploadSpeed\":\"0\",    \"files\":[        {          \"completedLength\":\"12761\",          \"index\":\"1\",          \"length\":\"12761\",          \"path\":\"./downloads/index.html.31\",          \"selected\":\"true\",          \"uris\":[            {              \"status\":\"used\",              \"uri\":\"http://www.google.com\"            },            {              \"status\":\"waiting\",              \"uri\":\"http://www.google.com\"            }            ]        }]    }  }"
+
+-- let r = "[        {          \"completedLength\":\"12761\",          \"index\":\"1\",          \"length\":\"12761\",          \"path\":\"./downloads/index.html.31\",          \"selected\":\"true\",          \"uris\":[            {              \"status\":\"used\",              \"uri\":\"http://www.google.com\"            },            {              \"status\":\"waiting\",              \"uri\":\"http://www.google.com\"            }            ]        }]"
+
+data GetUriResponse = GetUriResponse {
+  gu_uri :: URL,
+  gu_status :: String
+ } deriving (Show, Generic)
+
+instance FromJSON GetUriResponse where
+  parseJSON = genericParseJSON defaultOptions { fieldLabelModifier = (removePrefix "gu_") }
+
+data GetFilesResponse = GetFilesResponse {
+  gf_index :: Integer,
+  gf_path :: String,
+  gf_length :: Integer,
+  gf_completedLength :: Integer,
+  gf_selected :: Bool,
+  gf_uris :: [GetUriResponse]
+  } deriving (Show, Generic)
+
+instance FromJSON GetFilesResponse where
+  parseJSON (Object v) = GetFilesResponse <$>
+    fmap read (v .: "index") <*>
+    v .: "path" <*>
+    fmap read (v .: "length") <*>
+    fmap read (v .: "completedLength") <*>
+    fmap parseBoolean (v .: "selected") <*>
+    v .: "uris"
+
+parseBoolean :: String -> Bool
+parseBoolean "true" = True
+parseBoolean "false" = False
+parseBoolean x = error $ "Cannot parse this as a boolean: " ++ (show x)
+
+data StatusResponse = StatusResponse {
+  st_gid :: Aria2Gid,
+  st_status :: String,
+  st_totalLength :: Integer,
+  st_completedLength :: Integer,
+  st_uploadLength :: Integer,
+  st_downloadSpeed :: Integer,
+  st_uploadSpeed :: Integer,
+  st_infoHash :: Maybe String,
+  st_numSeeders :: Maybe Integer,
+  st_seeder :: Maybe Bool,
+  st_pieceLength :: Integer,
+  st_numPieces :: Integer,
+  st_connections :: Integer,
+  st_errorCode :: Integer,
+  st_errorMessage :: Maybe String,
+  st_followedBy :: Maybe [Aria2Gid],
+  st_following :: Maybe Aria2Gid,
+  st_belongsTo :: Maybe Aria2Gid,
+  st_dir :: String,
+  st_files :: [GetFilesResponse],
+  st_bittorrent :: Maybe Value
+  } deriving (Show, Generic)
+
+instance FromJSON StatusResponse where
+  parseJSON (Object v) = StatusResponse <$>
+    v .: "gid" <*>
+    v .: "status" <*>
+    fmap read (v .: "totalLength") <*>
+    fmap read (v .: "completedLength") <*>
+    fmap read (v .: "uploadLength") <*>
+    fmap read (v .: "downloadSpeed") <*>
+    fmap read (v .: "uploadSpeed") <*>
+    v .:? "infoHash" <*>
+    (fmap . fmap) read (v .:? "numSeeders") <*>
+    (fmap . fmap) parseBoolean (v .:? "seeder") <*>
+    fmap read (v .: "pieceLength") <*>
+    fmap read (v .: "numPieces") <*>
+    fmap read (v .: "connections") <*>
+    fmap read (v .: "errorCode") <*>
+    v .:? "errorMessage" <*>
+    v .:? "followedBy" <*>
+    v .:? "following" <*>
+    v .:? "belongsTo" <*>
+    v .: "dir" <*>
+    v .: "files" <*>
+    v .:? "bittorrent"
 
 -- instance (FromJSON p) => FromJSON (JsonRpcResponse p) where
 --   parseJSON (Object v) = do
@@ -227,6 +308,7 @@ handleAria2Response pool tgOutChan logId msg aria2Log = do
     Nothing -> error $ "Not expecting nwCommand to be blank. log=" ++ (show aria2Log)
     Just InvalidCommand -> putStrLn $ "ERROR: Very strange, how did an InvalidCommand get converted into an Aria2Log in the first place"
     Just (DownloadCommand url) -> handleAddUriResponse
+    Just (StatusCommand gid) -> runDb pool $ logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=(fromJust $ logTgramChatId aria2Log), Ty.message=(TgramMsgText (BL.unpack msg))} tgOutChan
     _ -> putStrLn $ "Have not implemented handling of such responses: (logId, request)=" ++ show (logId, nwCommand)
 
   where
@@ -242,9 +324,15 @@ handleAria2Response pool tgOutChan logId msg aria2Log = do
       runDb pool $ updateWithTgramOutgoingMsg logId tgMsg
       writeChan tgOutChan  tgMsg
 
+    -- handleStatusResponse :: ExceptT String NwApp ()
+    -- handleStatusResponse = do
+    --   eitherDecode msg :: Either String (JsonRpcResponse Aria2Status)
+      
+
 prepareJsonRpcRequest :: Aria2RequestId -> NightwatchCommand -> BL.ByteString
 prepareJsonRpcRequest requestId nwCommand = case nwCommand of
   DownloadCommand url -> prepareJsonRpcRequest_ "aria2.addUri" [[url]]
+  StatusCommand gid -> prepareJsonRpcRequest_ "aria2.tellStatus" [gid]
   _ -> error "Not implemented yet"
   where
     prepareJsonRpcRequest_ :: (ToJSON param) => String -> param -> BL.ByteString
