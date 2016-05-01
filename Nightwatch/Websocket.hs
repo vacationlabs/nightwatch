@@ -38,6 +38,8 @@ import           Text.Printf
 import           Text.Read (readMaybe)
 import           Data.Typeable
 import           Control.Monad.Catch
+import           Control.Exception
+import           Safe (fromJustNote)
 
 data JsonRpcException = JsonRpcParseException String | JsonRpcErrorException JsonRpcError deriving (Show, Typeable)
 instance Exception JsonRpcException
@@ -147,6 +149,12 @@ extractJsonRpcResult x = do
       Nothing -> throwM $ JsonRpcParseException "Did not receive either Result OR Error in JSONRpcRespons"
       Just y -> return y
 
+extractJsonRpcNotification :: (FromJSON a, MonadThrow m) => BL.ByteString -> m a
+extractJsonRpcNotification x = do
+  case (eitherDecode x :: ((FromJSON a) => Either String (JsonRpcNotification a))) of
+    Left s -> throwM $ JsonRpcParseException s
+    Right r -> return (notifParams r)
+
 
 data StatusResponse = StatusResponse {
   st_gid :: Aria2Gid,
@@ -243,7 +251,7 @@ aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error i
   case (decode msg :: Maybe Object) of
     Nothing -> putStrLn "Received blank ping from Aria2. Ignoring"
     Just obj -> case (HM.lookup "id" obj) of 
-      Nothing -> websocketNotificationReceived_ msg obj 
+      Nothing -> websocketNotificationReceived_ msg
       Just (String requestId) -> websocketResponseReceived_ msg (T.unpack requestId) obj
   where
     websocketResponseReceived_ :: BL.ByteString -> Aria2RequestId -> Object -> IO ()
@@ -257,28 +265,29 @@ aria2WebsocketReceiver pool tgOutChan conn = forever $ logAllExceptions "Error i
           handleAria2Response pool tgOutChan (entityKey l) msg (entityVal l)
           putStrLn $ "Received response to requestId " ++ (show requestId) ++ " and handled successfully."
 
-    websocketNotificationReceived_ :: BL.ByteString -> Object -> IO ()
-    websocketNotificationReceived_ msg obj = do
-      logE <- runDb pool $ logAria2Notification (BL.unpack msg)
-      let method = (HM.lookup "method" obj)
-      let exceptT = case method of
-            Just (String "aria2.onDownloadComplete") -> onDownloadComplete tgOutChan msg logE
-            _ -> throwError $ "Don't know how to handle this notification. Ignoring=" ++ (show obj)
-      r <- (runDb pool $ runExceptT exceptT)
-      case r of
-        Left s -> putStrLn $ "ERROR: " ++ s
-        Right r -> putStrLn $ "Handled " ++ (show method) ++  "successfully"
+    websocketNotificationReceived_ :: BL.ByteString -> IO ()
+    websocketNotificationReceived_ msg = runDb pool $ do
+      logE <- logAria2Notification (BL.unpack msg)
+      handleAria2Notification tgOutChan msg logE
 
-onDownloadComplete :: TelegramOutgoingChannel -> BL.ByteString -> Entity Log -> ExceptT String NwApp ()
-onDownloadComplete tgOutChan msg logE = do
-  n <- case (eitherDecode msg :: Either String (JsonRpcNotification Value)) of
-    Left s -> throwError s
-    Right n -> return n
-  gid <- maybeToExceptT ("GID not found in response" ++ (show n)) (MaybeT $ return $ (notifParams n) L.^? (L.nth 0) . (L.key "gid"))
-  dloadE <- maybeToExceptT ("Download with this GID not found " ++ (show gid)) (MaybeT $ fetchDownloadByGid $ Aria2Gid $ valueToString gid)
-  user <- maybeToExceptT ("User with this ID not found " ++ (show $ downloadUserId $ entityVal dloadE)) $ (MaybeT $ fetchUserById $ downloadUserId $ entityVal dloadE)
-  chatId <- maybeToExceptT ("User does not have telegram chat ID " ++ (show user)) $ (MaybeT $ return $ userTgramChatId user)
-  lift $ logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download completed. GID=" ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl $ entityVal dloadE))} tgOutChan
+
+handleAria2Notification :: TelegramOutgoingChannel -> BL.ByteString -> Entity Log -> NwApp ()
+handleAria2Notification tgOutChan msg logE = do
+  case (decode msg :: Maybe (JsonRpcNotification Value)) of
+    Nothing -> liftIO $ putStrLn "Received blank notification from Aria2. Ignoring."
+    Just n ->  case (notifMethod n) of
+      "aria2.onDownloadComplete" -> onDownloadComplete
+      _ -> liftIO $ putStrLn $ "Don't know how to handle this notification. Ignoring" ++ (show n)
+      
+  where
+    onDownloadComplete :: NwApp ()
+    onDownloadComplete = do
+      v <- extractJsonRpcNotification msg :: NwApp Value
+      let gid = fromJustNote "GID not found in reponse" $ v L.^? (L.nth 0) . (L.key "gid")
+      dloadE <- fmap (fromJustNote $ "Download not found with GID" ++ (show gid)) (fetchDownloadByGid $ Aria2Gid $ valueToString gid)
+      user <- fmap (fromJustNote ("User with this ID not found " ++ (show $ downloadUserId $ entityVal dloadE))) (fetchUserById $ downloadUserId $ entityVal dloadE)
+      let chatId = fromJustNote ("User does not have telegram chat ID " ++ (show user)) (userTgramChatId user)
+      logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download completed. GID=" ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl $ entityVal dloadE))} tgOutChan
 
 -- withEitherHandling :: (MonadIO m) => Either String (m a) -> m a
 -- withEitherHandling v = case v of
@@ -332,39 +341,33 @@ valueToString value = case (fromJSON value :: Result String) of
 handleAria2Response :: ConnectionPool -> TelegramOutgoingChannel -> LogId -> BL.ByteString -> Log -> IO ()
 handleAria2Response pool tgOutChan logId msg aria2Log = do
   let nwCommand = logNwCmd aria2Log
-  case nwCommand of
-    Nothing -> error $ "Not expecting nwCommand to be blank. log=" ++ (show aria2Log)
-    Just InvalidCommand -> putStrLn $ "ERROR: Very strange, how did an InvalidCommand get converted into an Aria2Log in the first place"
-    Just (DownloadCommand url) -> handleAddUriResponse
-    Just (StatusCommand gid) -> runDb pool $ handleStatusResponse
-    Just (PauseCommand gid) -> runDb pool $ do
-      r <- runExceptT handlePauseResponse
-      case r of 
-        Left err -> logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "ERROR ==> " ++ err)} tgOutChan
-        Right action -> return action
-    _ -> putStrLn $ "Have not implemented handling of such responses: (logId, request)=" ++ show (logId, nwCommand)
+      handler = case nwCommand of
+        Nothing -> throwM $ AssertionFailed $ "Not expecting nwCommand to be blank. log=" ++ (show aria2Log)
+        Just InvalidCommand -> throwM $ AssertionFailed "ERROR: Very strange, how did an InvalidCommand get converted into an Aria2Log in the first place"
+        Just (DownloadCommand url) -> handleAddUriResponse
+        Just (StatusCommand gid) -> handleStatusResponse
+        Just (PauseCommand gid) -> handlePauseResponse
+        _ -> throwM $ PatternMatchFail $ "Have not implemented handling of such responses: (logId, request)=" ++ show (logId, nwCommand)
+  runDb pool handler
 
   where
     chatId = fromJust $ logTgramChatId aria2Log
-    handleAddUriResponse :: IO ()
+    nwCmd = fromJust $ logNwCmd aria2Log
+    userId = fromJust $ logUserId aria2Log
+
+    handleAddUriResponse :: NwApp ()
     handleAddUriResponse = do
-      putStrLn "===> about to handleAddUriResponse"
-      let gid = fromJust $ result $ fromJust $ (decode msg :: Maybe (JsonRpcResponse Aria2Gid))
-      putStrLn $ "===> PARSED" ++ (show gid)
-      let (DownloadCommand url, userId, chatId) = (fromJust $ logNwCmd aria2Log, fromJust $ logUserId aria2Log, fromJust $ logTgramChatId aria2Log)
-      dloadEntity <- runDb pool $ createDownload url gid logId userId
-      let tgMsg = TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download GID " ++ (show $ downloadGid $ entityVal dloadEntity))}
-      runDb pool $ logAndSendTgramMessage logId tgMsg tgOutChan
+      let (DownloadCommand url) = nwCmd
+      gid <- extractJsonRpcResult msg :: NwApp Aria2Gid
+      dloadE <- createDownload url gid logId userId
+      let (Aria2Gid gidStr) = gid
+          tgMsg = TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download GID " ++ gidStr)}
+      logAndSendTgramMessage logId tgMsg tgOutChan
 
-
-    handlePauseResponse :: ExceptT String NwApp ()
+    handlePauseResponse :: NwApp ()
     handlePauseResponse = do
-      res <- hoistEither (eitherDecode msg :: Either String (JsonRpcResponse String))
-      case res of
-        JsonRpcResponse{rpc_error=(Just err), result=_, response_id=_} ->
-          throwE $ (show $ code err) ++ ": " ++ (Nightwatch.Websocket.message err)
-        JsonRpcResponse{result=(Just res), rpc_error=_, response_id=_} ->
-          lift $ logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText res)} tgOutChan
+      res <- extractJsonRpcResult msg :: NwApp String
+      logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText res)} tgOutChan
 
     handleStatusResponse :: NwApp ()
     handleStatusResponse = do
