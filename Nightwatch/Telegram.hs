@@ -1,38 +1,38 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..), AuthNightwatchCommand(..)) where
-import Control.Lens hiding(from)
-import Network.Wreq
-import Data.Aeson
-import Data.Aeson.Types
-import GHC.Generics (Generic)
-import Control.Concurrent
-import Control.Monad (forever, guard, liftM)
-import Control.Concurrent.Chan
-import Data.List (isPrefixOf, drop)
-import Data.Text (Text, pack)
-import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
-import Data.Functor (void)
-import Network.XmlRpc.Client
-import Data.Time
-import Data.Time.Clock.POSIX
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.ByteString.Lazy.Char8 as BL(pack, unpack)
-import Text.Regex.Posix
-import System.IO.Error
-import Text.Read (readMaybe)
-import System.Process (proc, createProcess, getProcessExitCode, ProcessHandle, waitForProcess)
-import qualified Network.WebSockets  as WS
-import qualified Data.Text           as T
-import qualified Data.Text.IO        as T
+import           Control.Concurrent
 import qualified Control.Concurrent.Async as A
+import           Control.Concurrent.Chan
+import           Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
+import Control.Lens hiding(from)
+import           Control.Monad (forever, guard, liftM)
+import           Control.Monad.IO.Class (liftIO, MonadIO)
+import           Data.Aeson
+import           Data.Aeson.Types
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Lazy.Char8 as BL (pack, unpack)
+import           Data.Functor (void)
+import           Data.List (isPrefixOf, drop)
 import qualified Data.Map as M
-import Nightwatch.Types hiding (message)
-import qualified Nightwatch.Types as Ty(message)
-import Nightwatch.DBTypes hiding (message, chatId, User(..))
+import qualified Data.Text as T
+import           Data.Text (Text, pack)
+import qualified Data.Text.IO as T
+import           Data.Time
+import           Data.Time.Clock.POSIX
+import           GHC.Generics (Generic)
+import qualified Network.WebSockets as WS
+import           Network.Wreq
+import           Network.XmlRpc.Client
 import qualified Nightwatch.DBTypes as DB (message, chatId, User(..), authenticateChat)
-import Control.Monad.IO.Class  (liftIO, MonadIO)
-import Nightwatch.TelegramTypes
+import           Nightwatch.DBTypes hiding (message, chatId, User(..))
+import           Nightwatch.TelegramTypes
+import qualified Nightwatch.Types as Ty(message)
+import           Nightwatch.Types hiding (message)
+import           System.IO.Error
+import           System.Process (proc, createProcess, getProcessExitCode, ProcessHandle, waitForProcess)
+import           Text.Read (readMaybe)
+import           Text.Regex.Posix
 
 type Resp = Response TelegramResponse
 
@@ -124,6 +124,7 @@ processIncomingMessages pool tgIncomingChan aria2Chan = forever $ do
       case nwCmd of
         (DownloadCommand url) -> logTgram >>= sendToAria2
         (StatusCommand gid) -> logTgram >>= sendToAria2
+        (PauseCommand gid) -> logTgram >>= sendToAria2
         _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")}
 
 

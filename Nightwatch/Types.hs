@@ -24,6 +24,7 @@ module Nightwatch.Types (NightwatchCommand(..)
   ,logAllExceptions
   ,Aria2RequestId
   ,nextRequestId
+  ,joinStrings
   ) where
 
 import qualified Data.Text           as T
@@ -42,6 +43,8 @@ import Data.Functor (void)
 import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 import Data.UUID
 import qualified Data.UUID.V1 as UUIDv1
+import Data.Foldable(foldl')
+import Data.String(IsString)
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
@@ -127,3 +130,8 @@ nextRequestId = UUIDv1.nextUUID >>= \uuid ->
 
 -- parseRequestId :: String -> Maybe Aria2RequestId
 -- parseRequestId = Just . id
+
+
+joinStrings :: [String] -> String -> String
+joinStrings lst sep = drop (length sep) $ foldl' (\memo x -> memo ++ sep ++ x) "" lst
+

@@ -1,39 +1,49 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings     #-}
 module Nightwatch.Websocket (startAria2WebsocketClient) where
-import qualified Network.WebSockets  as WS
-import qualified Data.Text           as T
-import qualified Data.Text.IO        as T
+import           Control.Concurrent
 import qualified Control.Concurrent.Async as A
-import qualified Data.Map as M
-import Data.Aeson
-import Data.Aeson.Types
-import GHC.Generics (Generic)
-import Control.Concurrent
-import qualified Data.ByteString.Lazy as BL hiding (pack, unpack)
-import qualified Data.ByteString.Lazy.Char8 as BL(pack, unpack)
-import Control.Monad (forever)
-import Control.Concurrent.Chan
-import Nightwatch.Telegram
-import Nightwatch.Types hiding (message)
-import qualified Nightwatch.Types as Ty(message)
-import qualified Data.List as DL
-import qualified Data.HashMap.Strict as HM
-import qualified Data.Text.Lazy as TL
-import Nightwatch.DBTypes as DB
-import Text.Read (readMaybe)
-import Control.Monad.IO.Class  (liftIO, MonadIO)
-import Database.Persist.Sql (transactionSave)
-import Data.Maybe (fromJust)
-import Debug.Trace
-import Data.Char(toLower)
-import qualified Data.Aeson.Lens as L
+import           Control.Concurrent.Chan
+import           Control.Error.Util (hoistEither)
 import qualified Control.Lens as L
-import Control.Monad.Trans.Except
-import Control.Monad.Except
-import Control.Monad.Trans.Maybe
+import           Control.Monad (forever)
+import           Control.Monad.Except
+import           Control.Monad.IO.Class (liftIO, MonadIO)
+import           Control.Monad.Trans.Except
+import           Control.Monad.Trans.Maybe
+import           Data.Aeson
+import qualified Data.Aeson.Lens as L
+import           Data.Aeson.Types
+import qualified Data.ByteString.Lazy as BL hiding (pack, unpack)
+import qualified Data.ByteString.Lazy.Char8 as BL (pack, unpack)
+import           Data.Char (toLower)
+import qualified Data.Foldable as F(foldl')
+import qualified Data.HashMap.Strict as HM
+import qualified Data.List as DL
+import qualified Data.Map as M
+import           Data.Maybe (fromJust)
+import qualified Data.Text as T
+import qualified Data.Text.IO as T
+import qualified Data.Text.Lazy as TL
+import           Database.Persist.Sql (transactionSave)
+import           Debug.Trace
+import           GHC.Generics (Generic)
+import qualified Network.WebSockets as WS
+import           Nightwatch.DBTypes as DB
+import           Nightwatch.Telegram
+import qualified Nightwatch.Types as Ty(message)
+import           Nightwatch.Types hiding (message)
+import           Text.Printf
+import           Text.Read (readMaybe)
+import           Data.Typeable
+import           Control.Monad.Catch
+
+data JsonRpcException = JsonRpcParseException String | JsonRpcErrorException JsonRpcError deriving (Show, Typeable)
+instance Exception JsonRpcException
 
 newtype Aria2MethodName = Aria2MethodName String deriving (Show, Eq)
+
 -- type OutstandingRpcRequest = (aria2LogUserId, AuthNightwatchCommand)
 -- type OutstandingRpcRequests = MVar [OutstandingRpcRequest]
 
@@ -70,7 +80,10 @@ data JsonRpcResponse p = JsonRpcResponse {
 instance FromJSON JsonRpcError
 instance (FromJSON p) => FromJSON (JsonRpcResponse p) where
   parseJSON = genericParseJSON defaultOptions {
-    fieldLabelModifier=(\jsonKey -> if jsonKey=="response_id" then "id" else jsonKey)
+    fieldLabelModifier = \jsonKey -> case jsonKey of
+        "response_id" -> "id"
+        "rpc_error" -> "error"
+        _ -> jsonKey
   }
 
 -- let r = "{\"jsonrpc\":\"2.0\",\"params\":[{\"gid\":\"9641d0fc8e4b424c\"}], \"method\":\"aria2.onDownloadStart\"}"
@@ -120,6 +133,21 @@ parseBoolean "true" = True
 parseBoolean "false" = False
 parseBoolean x = error $ "Cannot parse this as a boolean: " ++ (show x)
 
+decodeJsonRpcResponse :: (FromJSON a, MonadThrow m) => BL.ByteString -> m (JsonRpcResponse a)
+decodeJsonRpcResponse x = case (eitherDecode x) of
+  Right r -> return r
+  Left s -> throwM $ JsonRpcParseException s
+
+extractJsonRpcResult :: (FromJSON a, MonadThrow m) => BL.ByteString -> m a
+extractJsonRpcResult x = do
+  r <- decodeJsonRpcResponse x
+  case (rpc_error r) of
+    Just e -> throwM $ JsonRpcErrorException e
+    Nothing -> case (result r) of
+      Nothing -> throwM $ JsonRpcParseException "Did not receive either Result OR Error in JSONRpcRespons"
+      Just y -> return y
+
+
 data StatusResponse = StatusResponse {
   st_gid :: Aria2Gid,
   st_status :: String,
@@ -134,7 +162,7 @@ data StatusResponse = StatusResponse {
   st_pieceLength :: Integer,
   st_numPieces :: Integer,
   st_connections :: Integer,
-  st_errorCode :: Integer,
+  st_errorCode :: Maybe String, -- TODO Convert this to (Maybe Integer)
   st_errorMessage :: Maybe String,
   st_followedBy :: Maybe [Aria2Gid],
   st_following :: Maybe Aria2Gid,
@@ -159,7 +187,7 @@ instance FromJSON StatusResponse where
     fmap read (v .: "pieceLength") <*>
     fmap read (v .: "numPieces") <*>
     fmap read (v .: "connections") <*>
-    fmap read (v .: "errorCode") <*>
+    v .:? "errorCode" <*>
     v .:? "errorMessage" <*>
     v .:? "followedBy" <*>
     v .:? "following" <*>
@@ -308,35 +336,96 @@ handleAria2Response pool tgOutChan logId msg aria2Log = do
     Nothing -> error $ "Not expecting nwCommand to be blank. log=" ++ (show aria2Log)
     Just InvalidCommand -> putStrLn $ "ERROR: Very strange, how did an InvalidCommand get converted into an Aria2Log in the first place"
     Just (DownloadCommand url) -> handleAddUriResponse
-    Just (StatusCommand gid) -> runDb pool $ logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=(fromJust $ logTgramChatId aria2Log), Ty.message=(TgramMsgText (BL.unpack msg))} tgOutChan
+    Just (StatusCommand gid) -> runDb pool $ handleStatusResponse
+    Just (PauseCommand gid) -> runDb pool $ do
+      r <- runExceptT handlePauseResponse
+      case r of 
+        Left err -> logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "ERROR ==> " ++ err)} tgOutChan
+        Right action -> return action
     _ -> putStrLn $ "Have not implemented handling of such responses: (logId, request)=" ++ show (logId, nwCommand)
 
   where
+    chatId = fromJust $ logTgramChatId aria2Log
     handleAddUriResponse :: IO ()
     handleAddUriResponse = do
       putStrLn "===> about to handleAddUriResponse"
-      traceShowM (decode msg :: Maybe (JsonRpcResponse Aria2Gid))
       let gid = fromJust $ result $ fromJust $ (decode msg :: Maybe (JsonRpcResponse Aria2Gid))
       putStrLn $ "===> PARSED" ++ (show gid)
       let (DownloadCommand url, userId, chatId) = (fromJust $ logNwCmd aria2Log, fromJust $ logUserId aria2Log, fromJust $ logTgramChatId aria2Log)
       dloadEntity <- runDb pool $ createDownload url gid logId userId
       let tgMsg = TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download GID " ++ (show $ downloadGid $ entityVal dloadEntity))}
-      runDb pool $ updateWithTgramOutgoingMsg logId tgMsg
-      writeChan tgOutChan  tgMsg
+      runDb pool $ logAndSendTgramMessage logId tgMsg tgOutChan
 
-    -- handleStatusResponse :: ExceptT String NwApp ()
-    -- handleStatusResponse = do
-    --   eitherDecode msg :: Either String (JsonRpcResponse Aria2Status)
+
+    handlePauseResponse :: ExceptT String NwApp ()
+    handlePauseResponse = do
+      res <- hoistEither (eitherDecode msg :: Either String (JsonRpcResponse String))
+      case res of
+        JsonRpcResponse{rpc_error=(Just err), result=_, response_id=_} ->
+          throwE $ (show $ code err) ++ ": " ++ (Nightwatch.Websocket.message err)
+        JsonRpcResponse{result=(Just res), rpc_error=_, response_id=_} ->
+          lift $ logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText res)} tgOutChan
+
+    handleStatusResponse :: NwApp ()
+    handleStatusResponse = do
+      response <- extractJsonRpcResult msg :: NwApp StatusResponse
+      logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ humanizeStatusResponse response)} tgOutChan
       
+humanizeStatusResponse :: StatusResponse -> String
+humanizeStatusResponse res
+  | percentDownloaded_  == (fromIntegral 100) = printf "Download completed (%s)" (humanizeBytes $ st_totalLength res)
+  | (length $ st_files res) > 1 = joinStrings (map downloadFileSummary (st_files res)) "\n"
+  | otherwise = (printf "%.0f%% downloaded. %s to go (%s at %s/s)..."
+                 percentDownloaded_
+                 (downloadEta downloadSpeed etaSeconds)
+                 (humanizeBytes remainingLength)
+                 (humanizeBytes downloadSpeed))
+  where
+    percentDownloaded_ = (percentDownloaded (st_completedLength res) (st_totalLength res))
+    downloadSpeed = st_downloadSpeed res
+    remainingLength = ((st_totalLength res) - (st_completedLength res))
+    etaSeconds :: Integer
+    etaSeconds = remainingLength `div` downloadSpeed
+
+downloadEta :: Integer -> Integer -> String
+downloadEta downloadSpeed etaSeconds
+  | downloadSpeed < 1 = "A long time"
+  | etaSeconds < 1*60 = "Under a minute"
+  | otherwise = joinStrings (map (\(cnt, str) -> (show cnt) ++ " " ++ str) (take 2 x)) ", "
+  where
+    (tMin, sec) = divMod etaSeconds 60
+    (tHr, min) = if tMin==0 then (0, 0) else divMod tMin 60
+    (tDays, hr) = if tHr==0 then (0, 0) else divMod tHr 24
+    (weeks, days) = if tDays==0 then (0, 0) else divMod tDays 7
+    x = filter (\(cnt, _) -> cnt>0) [(weeks, "weeks"), (days, "days"), (hr, "hours"), (min, "minutes")]
+
+downloadFileSummary :: GetFilesResponse -> String
+downloadFileSummary res = (printf "[%.0f] %s"
+                           (percentDownloaded (gf_completedLength res) (gf_length res))
+                           (gf_path res))
+
+percentDownloaded :: Integer -> Integer -> Float
+percentDownloaded completed total = ((fromIntegral completed) / (fromIntegral total)) * 100.0
+
+downloadUriSummary :: GetUriResponse -> String
+downloadUriSummary res = printf "[%s] %s" (gu_status res) (show $ gu_uri res)
 
 prepareJsonRpcRequest :: Aria2RequestId -> NightwatchCommand -> BL.ByteString
 prepareJsonRpcRequest requestId nwCommand = case nwCommand of
   DownloadCommand url -> prepareJsonRpcRequest_ "aria2.addUri" [[url]]
   StatusCommand gid -> prepareJsonRpcRequest_ "aria2.tellStatus" [gid]
+  PauseCommand gid -> prepareJsonRpcRequest_ "aria2.pause" [gid]
   _ -> error "Not implemented yet"
   where
     prepareJsonRpcRequest_ :: (ToJSON param) => String -> param -> BL.ByteString
     prepareJsonRpcRequest_ method params = encode JsonRpcRequest{request_id=requestId, method=method, params=params}
+
+humanizeBytes :: Integer -> String
+humanizeBytes b
+  | b < 1024 = printf "%d bytes" b
+  | b <= 1024*1024 = printf "%.2f KB" (((fromIntegral b) / (1024))::Float)
+  | b <= 1024*1024*1024 = printf "%.2f MB" (((fromIntegral b) / (1024*1024))::Float)
+  | otherwise = printf "%.2f GB" (((fromIntegral b) / (1024*1024*1024))::Float)
 
    -- TODO: we need to figure out how to get the telegramLogId here.
   -- createAria2Log requestId (T.unpack jsonRequest) Nothing (userId authNwCommand)

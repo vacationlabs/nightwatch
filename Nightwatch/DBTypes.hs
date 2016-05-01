@@ -49,19 +49,20 @@ module Nightwatch.DBTypes(User(..)
   ,runMigrations
   ,Log(..)
   ,LogId(..)
+  ,joinStrings
   ) where
-import Control.Monad.IO.Class  (liftIO, MonadIO)
-import Database.Persist
-import Database.Persist.Sqlite
-import Database.Persist.TH
-import Data.Time (UTCTime, getCurrentTime)
-import Nightwatch.Types
-import Control.Concurrent.Chan(Chan)
+import           Control.Monad.IO.Class (liftIO, MonadIO)
+import           Database.Persist
+import           Database.Persist.Sqlite
+import           Database.Persist.TH
+import           Data.Time (UTCTime, getCurrentTime)
+import           Nightwatch.Types
+import           Control.Concurrent.Chan (Chan)
 import qualified Data.Text as T
-import Control.Monad.Trans.Resource (runResourceT)
-import Control.Monad.Logger (runStderrLoggingT)
+import           Control.Monad.Trans.Resource (runResourceT)
+import           Control.Monad.Logger (runStderrLoggingT)
 import qualified Nightwatch.TelegramTypes as TT
-import Control.Concurrent (writeChan)
+import           Control.Concurrent (writeChan)
 
 -- import Nightwatch.DBInternal
 
