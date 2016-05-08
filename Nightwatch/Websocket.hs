@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings     #-}
 module Nightwatch.Websocket (startAria2WebsocketClient) where
@@ -278,7 +277,7 @@ handleAria2Notification tgOutChan msg logE = do
     Just n ->  case (notifMethod n) of
       "aria2.onDownloadComplete" -> onDownloadComplete
       _ -> liftIO $ putStrLn $ "Don't know how to handle this notification. Ignoring" ++ (show n)
-      
+
   where
     onDownloadComplete :: NwApp ()
     onDownloadComplete = do
@@ -287,7 +286,11 @@ handleAria2Notification tgOutChan msg logE = do
       dloadE <- fmap (fromJustNote $ "Download not found with GID" ++ (show gid)) (fetchDownloadByGid $ Aria2Gid $ valueToString gid)
       user <- fmap (fromJustNote ("User with this ID not found " ++ (show $ downloadUserId $ entityVal dloadE))) (fetchUserById $ downloadUserId $ entityVal dloadE)
       let chatId = fromJustNote ("User does not have telegram chat ID " ++ (show user)) (userTgramChatId user)
-      logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download completed. GID=" ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl $ entityVal dloadE))} tgOutChan
+      -- Now, making another tellStatus call to send the download stats along with this notification.
+      logAndSendTgramMessage (entityKey logE) TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ "Download completed. " ++ (show $ downloadGid $ entityVal dloadE) ++ " URL=" ++ (show $ downloadUrl $ entityVal dloadE))} tgOutChan
+
+      
+
 
 -- withEitherHandling :: (MonadIO m) => Either String (m a) -> m a
 -- withEitherHandling v = case v of
@@ -435,7 +438,7 @@ humanizeBytes b
 
 aria2WebsocketSender :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel ->  WS.Connection -> IO ()
 aria2WebsocketSender pool aria2Chan tgOutChan conn = forever $ logAllExceptions "Error in aria2WebsocketSender" $ do
-  authNwCmd <- (readChan aria2Chan)
+  authwNCmd <- (readChan aria2Chan)
   putStrLn $ "Nightwatch command received:" ++ (show authNwCmd) ++ " Sending to Aria2 and logging to DB"
   runDb pool $ do
     requestId <- liftIO nextRequestId
@@ -446,10 +449,45 @@ aria2WebsocketSender pool aria2Chan tgOutChan conn = forever $ logAllExceptions 
 
 aria2WebsocketClient :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> WS.ClientApp ()
 aria2WebsocketClient pool aria2Chan tgOutChan conn = do
-  a1 <- A.async (aria2WebsocketReceiver pool tgOutChan conn)
-  a2 <- A.async (aria2WebsocketSender pool aria2Chan tgOutChan conn)
-  A.waitAnyCancel [a1, a2]
+  c <- newChan
+  a1 <- A.async (websocketReceiver c)
+  a2 <- A.async (websocketSender c)
+  a3 <- A.async (websocketOrchestrator c [])
+  --   a1 <- A.async (aria2WebsocketReceiver pool tgOutChan conn)
+  --  a2 <- A.async (aria2WebsocketSender pool aria2Chan tgOutChan conn)
+  A.waitAnyCancel [a1, a2, a3]
   return ()
+
+  where
+    websocketReceiver :: Chan (Either BL.ByteString Aria2ChannelMessage) -> IO ()
+    websocketReceiver c = forever $ do
+      msg <- WS.receiveData conn :: BL.ByteString
+      writeChan (Left msg) c
+
+    websocketSender :: Chan (Either BL.ByteString Aria2ChannelMessage) -> IO ()
+    websocketSender c = forever $ do
+      authNwCmd <- readChan aria2Chan
+      writeChan (Right authNwCmd) c
+
+    websocketOrchestrator :: Chan (Either BL.ByteString Aria2ChannelMessage) -> [(Aria2RequestId, Aria2ChannelMessage)] -> IO ()
+    websocketOrchestrator c osRpcReqs = do
+      m <- readChan c
+      case m of
+        -- Received a notification or response
+        Left msg -> 
+        -- About to make a request
+        Right authNwCmd -> do
+          requestId <- nextRequestId
+          sendAria2Message requestId authNwCmd
+          websocketOrchestrator c (requestId, authNwCmd):osRpcReqs
+
+    sendAria2Message :: Aria2RequestId -> AuthNightwatchCommand -> IO ()
+    sendAria2Message requestId authNwCmd = runDb pool $ do
+      let jsonRequest = prepareJsonRpcRequest requestId (command authNwCmd)
+      updateWithAria2Request (logId authNwCmd) requestId (BL.unpack jsonRequest)
+      transactionSave
+      liftIO $ WS.sendTextData conn jsonRequest
+      
 
 startAria2WebsocketClient :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
 startAria2WebsocketClient pool aria2Chan tgOutChan = do 

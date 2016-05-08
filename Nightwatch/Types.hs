@@ -25,6 +25,7 @@ module Nightwatch.Types (NightwatchCommand(..)
   ,Aria2RequestId
   ,nextRequestId
   ,joinStrings
+  ,Generic
   ) where
 
 import qualified Data.Text           as T
