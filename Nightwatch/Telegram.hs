@@ -21,7 +21,6 @@ import qualified Data.Text.IO as T
 import           Data.Time
 import           Data.Time.Clock.POSIX
 import           GHC.Generics (Generic)
-import qualified Network.WebSockets as WS
 import           Network.Wreq
 import           Network.XmlRpc.Client
 import qualified Nightwatch.DBTypes as DB (message, chatId, User(..), authenticateChat)
@@ -33,13 +32,16 @@ import           System.IO.Error
 import           System.Process (proc, createProcess, getProcessExitCode, ProcessHandle, waitForProcess)
 import           Text.Read (readMaybe)
 import           Text.Regex.Posix
+import qualified Nightwatch.Aria2 as A2
+import           Safe (fromJustNote)
+import           Text.Printf
 
 type Resp = Response TelegramResponse
 
 botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
 apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
 ariaRPCPort = 9999
-ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/rpc"
+ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/jsonrpc"
 aria2Command = "./aria2-1.19.3/bin/aria2c"
 aria2DownloadDir = "./downloads"
 aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
@@ -117,16 +119,92 @@ processIncomingMessages pool tgIncomingChan aria2Chan = forever $ do
     Nothing -> sendMessage TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText "Cannot process command. You are not an authenticated user.")}
     Just userE -> do
       let nwCmd = parseIncomingMessage (text msg)
-          logTgram :: IO (Entity Log)
-          logTgram = (runDb pool $ logIncomingTelegramMessage msg  (Just $ entityKey userE) (Just nwCmd))
-          sendToAria2 :: Entity Log -> IO ()
-          sendToAria2 logE = writeChan aria2Chan AuthNightwatchCommand{command=nwCmd, userId=(entityKey userE), DB.chatId=chatId, logId=(entityKey logE)}
-      case nwCmd of
-        (DownloadCommand url) -> logTgram >>= sendToAria2
-        (StatusCommand gid) -> logTgram >>= sendToAria2
-        (PauseCommand gid) -> logTgram >>= sendToAria2
-        _ -> sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")}
+          logTgram :: NwApp (Entity Log)
+          logTgram = (logIncomingTelegramMessage msg  (Just $ entityKey userE) (Just nwCmd))
+      void $ forkIO $ runDb pool $ case nwCmd of
+        (DownloadCommand url) -> logTgram >>= (\logE -> onDownloadCommand userE logE url)
+        (StatusCommand gid) -> logTgram >>= (\logE -> onStatusCommand userE logE gid)
+        _ -> liftIO $ sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")}
 
+
+onStatusCommand :: Entity DB.User -> Entity Log -> Aria2Gid -> NwApp ()
+onStatusCommand userE logE gid = do
+  let (Aria2Gid gidS) = gid
+      logId = entityKey logE
+      log = entityVal logE
+      userId = entityKey userE
+      user = entityVal userE
+      chatId = (fromJustNote "Expecting Log to have telegram chat ID" $ logTgramChatId log)
+  statusResponse <- liftIO $ A2.tellStatus ariaRPCUrl gid
+  updateWithAria2Response logId (show statusResponse)
+  logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
+
+
+onDownloadCommand :: Entity DB.User -> Entity Log -> URL -> NwApp ()
+onDownloadCommand userE logE url = do
+  let (URL urlS) = url
+      logId = entityKey logE
+      log = entityVal logE
+      userId = entityKey userE
+      user = entityVal userE
+      chatId = (fromJustNote "Expecting Log to have telegram chat ID" $ logTgramChatId log)
+  gid <- liftIO $ A2.addUri ariaRPCUrl urlS
+  let (Aria2Gid gidS) = gid
+  updateWithAria2Response logId gidS
+  dloadE <- createDownload url gid logId userId
+  logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText $ "Download queued. ID=" ++ gidS ++ ". You can use that to check the status, pause, or stop the download. eg. status " ++ gidS)}
+
+logAndSendTgramMessage :: LogId -> TelegramOutgoingMessage -> NwApp()
+logAndSendTgramMessage logId msg = do
+  updateWithTgramOutgoingMsg logId msg
+  liftIO $ sendMessage msg
+
+
+humanizeBytes :: Integer -> String
+humanizeBytes b
+  | b < 1024 = printf "%d bytes" b
+  | b <= 1024*1024 = printf "%.2f KB" (((fromIntegral b) / (1024))::Float)
+  | b <= 1024*1024*1024 = printf "%.2f MB" (((fromIntegral b) / (1024*1024))::Float)
+  | otherwise = printf "%.2f GB" (((fromIntegral b) / (1024*1024*1024))::Float)
+
+humanizeStatusResponse :: A2.StatusResponse -> String
+humanizeStatusResponse res
+  | percentDownloaded_  == (fromIntegral 100) = printf "Download completed (%s)" (humanizeBytes $ A2.st_totalLength res)
+  | (length $ A2.st_files res) > 1 = joinStrings (map downloadFileSummary (A2.st_files res)) "\n"
+  | otherwise = (printf "%.0f%% downloaded. %s to go (%s at %s/s)..."
+                 percentDownloaded_
+                 (downloadEta downloadSpeed etaSeconds)
+                 (humanizeBytes remainingLength)
+                 (humanizeBytes downloadSpeed))
+  where
+    percentDownloaded_ = (percentDownloaded (A2.st_completedLength res) (A2.st_totalLength res))
+    downloadSpeed = A2.st_downloadSpeed res
+    remainingLength = ((A2.st_totalLength res) - (A2.st_completedLength res))
+    etaSeconds :: Integer
+    etaSeconds = remainingLength `div` downloadSpeed
+
+downloadEta :: Integer -> Integer -> String
+downloadEta downloadSpeed etaSeconds
+  | downloadSpeed < 1 = "A long time"
+  | etaSeconds < 1*60 = "Under a minute"
+  | otherwise = joinStrings (map (\(cnt, str) -> (show cnt) ++ " " ++ str) (take 2 x)) ", "
+  where
+    (tMin, sec) = divMod etaSeconds 60
+    (tHr, min) = if tMin==0 then (0, 0) else divMod tMin 60
+    (tDays, hr) = if tHr==0 then (0, 0) else divMod tHr 24
+    (weeks, days) = if tDays==0 then (0, 0) else divMod tDays 7
+    x = filter (\(cnt, _) -> cnt>0) [(weeks, "weeks"), (days, "days"), (hr, "hours"), (min, "minutes")]
+
+downloadFileSummary :: A2.GetFilesResponse -> String
+downloadFileSummary res = (printf "[%.0f] %s"
+                           (percentDownloaded (A2.gf_completedLength res) (A2.gf_length res))
+                           (A2.gf_path res))
+
+percentDownloaded :: Integer -> Integer -> Float
+percentDownloaded completed total = ((fromIntegral completed) / (fromIntegral total)) * 100.0
+
+downloadUriSummary :: A2.GetUriResponse -> String
+downloadUriSummary res = printf "[%s] %s" (A2.gu_status res) (show $ A2.gu_uri res)
 
 --sendCannedResponse :: Chan Update -> IO ()
 --sendCannedResponse tgIncomingChan = do
@@ -170,7 +248,7 @@ startTelegramBot pool aria2Chan tgOutChan = do
   tgIncomingChan <- newChan
   forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan aria2Chan)
   forkIO $ forever $ logAllExceptions "Error in doPollLoop: " (doPollLoop tgIncomingChan =<< getLastUpdateId)
-  forkIO $ forever $ logAllExceptions "Error in processOutgoingMessages:" (processOutgoingMessages tgOutChan)
+  -- forkIO $ forever $ logAllExceptions "Error in processOutgoingMessages:" (processOutgoingMessages tgOutChan)
   return ()
 
 startAria2 = forkIO $ forever  ensureAria2Running

@@ -376,7 +376,7 @@ handleAria2Response pool tgOutChan logId msg aria2Log = do
     handleStatusResponse = do
       response <- extractJsonRpcResult msg :: NwApp StatusResponse
       logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, Ty.message=(TgramMsgText $ humanizeStatusResponse response)} tgOutChan
-      
+
 humanizeStatusResponse :: StatusResponse -> String
 humanizeStatusResponse res
   | percentDownloaded_  == (fromIntegral 100) = printf "Download completed (%s)" (humanizeBytes $ st_totalLength res)

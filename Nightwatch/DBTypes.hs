@@ -41,7 +41,6 @@ module Nightwatch.DBTypes(User(..)
   ,logIncomingTelegramMessage
   ,updateWithTgramOutgoingMsg
   ,logAria2Notification
-  ,logAndSendTgramMessage
   ,SqlPersistM
   ,NwApp(..)
   ,Entity(..)
@@ -186,7 +185,3 @@ updateWithTgramOutgoingMsg requestId msg = (liftIO getCurrentTime) >>= (\time ->
 logAria2Notification :: String -> NwApp (Entity Log)
 logAria2Notification notif = (liftIO blankLog) >>= (\log -> insertEntity log{logAria2Response=(Just notif)})
 
-logAndSendTgramMessage :: LogId -> TelegramOutgoingMessage -> TelegramOutgoingChannel -> NwApp()
-logAndSendTgramMessage logId msg tgOutChan = do
-  updateWithTgramOutgoingMsg logId msg
-  liftIO $ writeChan tgOutChan msg

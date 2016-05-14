@@ -4,6 +4,9 @@ module Nightwatch.Aria2(
   Aria2RpcEndpoint
   ,JsonRpcException(..)
   ,Aria2Callbacks(..)
+  ,StatusResponse(..)
+  ,GetFilesResponse(..)
+  ,GetUriResponse(..)
   ,defaultAria2Callbacks
   ,addUri
   ,tellStatus
