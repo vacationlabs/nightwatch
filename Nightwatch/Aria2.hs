@@ -10,6 +10,7 @@ module Nightwatch.Aria2(
   ,defaultAria2Callbacks
   ,addUri
   ,tellStatus
+  ,pause
   ,startWebsocketClient
   ,ariaRPCUrl
   ) where
@@ -244,9 +245,12 @@ addUri rpcEndpoint url = makeJsonRpcAndExtractResult rpcEndpoint "aria2.addUri" 
 tellStatus :: Aria2RpcEndpoint -> Aria2Gid -> IO (StatusResponse)
 tellStatus rpcEndpoint gid = makeJsonRpcAndExtractResult rpcEndpoint "aria2.tellStatus" [gid]
 
-startWebsocketClient :: String -> Int -> String -> Aria2Callbacks -> IO ()
-startWebsocketClient host port path callbacks = do
-  forever $ logAllExceptions "ERROR IN startWebsocketClient: " $ WS.runClient host port path clientApp
+pause :: Aria2RpcEndpoint -> Aria2Gid -> IO (Aria2Gid)
+pause rpcEndpoint gid = makeJsonRpcAndExtractResult rpcEndpoint "aria2.pause" [gid]
+
+startWebsocketClient :: String -> Int -> Aria2Callbacks -> IO ()
+startWebsocketClient host port callbacks = do
+  forever $ logAllExceptions "ERROR IN startWebsocketClient: " $ WS.runClient host port "/jsonrpc" clientApp
   where
     clientApp :: WS.Connection -> IO ()
     clientApp conn = do
