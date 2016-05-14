@@ -6,7 +6,7 @@ import qualified Control.Concurrent.Async as A
 import           Control.Concurrent.Chan
 import           Control.Error.Util (hoistEither)
 import qualified Control.Lens as L
-import           Control.Monad (forever)
+ximport           Control.Monad (forever)
 import           Control.Monad.Except
 import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Control.Monad.Trans.Except

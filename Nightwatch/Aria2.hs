@@ -1,6 +1,15 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings     #-}
-module Nightwatch.Aria2 where
+module Nightwatch.Aria2(
+  Aria2RpcEndpoint
+  ,JsonRpcException(..)
+  ,Aria2Callbacks(..)
+  ,defaultAria2Callbacks
+  ,addUri
+  ,tellStatus
+  ,startWebsocketClient
+  ,ariaRPCUrl
+  ) where
 
 import           Control.Exception
 import           Control.Monad.Catch
@@ -19,6 +28,15 @@ import           Control.Exception
 import           Data.Aeson
 import           Data.Aeson.Types
 import qualified Control.Lens as L
+import qualified Data.Aeson.Lens as L
+import           Control.Concurrent
+import qualified Control.Concurrent.Async as A
+import qualified Network.WebSockets as WS
+import           Control.Monad (forever)
+import           Control.Monad.IO.Class (liftIO, MonadIO)
+import           Data.Functor (void)
+import qualified Data.Map.Strict as M
+import qualified Data.Text as T
 
 ariaRPCPort = 9999
 ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/jsonrpc"
@@ -29,6 +47,22 @@ data JsonRpcException = JsonRpcParseException String | JsonRpcErrorException Jso
 instance Exception JsonRpcException
 
 -- newtype Aria2MethodName = Aria2MethodName String deriving (Show, Eq)
+data Aria2Callbacks = Aria2Callbacks {
+  onDownloadStart :: Aria2Gid -> IO (),
+  onDownloadPause :: Aria2Gid -> IO (),
+  onDownloadComplete :: Aria2Gid -> IO (),
+  onDownloadStop :: Aria2Gid -> IO (),
+  onDownloadError :: Aria2Gid -> IO ()
+  }
+
+defaultAria2Callbacks :: Aria2Callbacks
+defaultAria2Callbacks = Aria2Callbacks {
+  onDownloadStart = (\_ -> return ()),
+  onDownloadPause = (\_ -> return ()),
+  onDownloadComplete = (\_ -> return ()),
+  onDownloadStop = (\_ -> return ()),
+  onDownloadError = (\_ -> return ())
+  }
 
 data VersionResponse = VersionResponse {
   version :: String,
@@ -178,12 +212,6 @@ decodeJsonRpcResponse x = case (eitherDecode x) of
 --       Nothing -> throwM $ JsonRpcParseException "Did not receive either Result OR Error in JSONRpcRespons"
 --       Just y -> return y
 
--- extractJsonRpcNotification :: (FromJSON a, MonadThrow m) => BL.ByteString -> m a
--- extractJsonRpcNotification x = do
---   case (eitherDecode x :: ((FromJSON a) => Either String (JsonRpcNotification a))) of
---     Left s -> throwM $ JsonRpcParseException s
---     Right r -> return (notifParams r)
-
 nextRequestId :: IO Aria2RequestId
 nextRequestId = UUIDv1.nextUUID >>= \uuid ->
   case uuid of
@@ -213,7 +241,31 @@ addUri rpcEndpoint url = makeJsonRpcAndExtractResult rpcEndpoint "aria2.addUri" 
 tellStatus :: Aria2RpcEndpoint -> Aria2Gid -> IO (StatusResponse)
 tellStatus rpcEndpoint gid = makeJsonRpcAndExtractResult rpcEndpoint "aria2.tellStatus" [gid]
 
+startWebsocketClient :: String -> Int -> String -> Aria2Callbacks -> IO ()
+startWebsocketClient host port path callbacks = do
+  forever $ logAllExceptions "ERROR IN startWebsocketClient: " $ WS.runClient host port path clientApp
+  where
+    clientApp :: WS.Connection -> IO ()
+    clientApp conn = do
+      d <- WS.receiveData conn
+      case ((decode d) :: Maybe Value) of
+        Nothing -> putStrLn ("Unable to parse notification" ++ (BL.unpack d))
+        (Just v) -> do
+          let incomingMethod = fromJustNote "No method name in notification" (v L.^? (L.key "method") . L._String)
+              p = fromJustNote "No params in notification" (v L.^? (L.key "params"))
+          void $ forkIO $ case incomingMethod of
+            "aria2.onDownloadStart" -> (onDownloadStart callbacks) (extractGidFromNotification p)
+            "aria2.onDownloadPause" -> (onDownloadPause callbacks) (extractGidFromNotification p)
+            "aria2.onDownloadComplete" -> (onDownloadComplete callbacks) (extractGidFromNotification p)
+            "aria2.onDownloadStop" -> (onDownloadStop callbacks) (extractGidFromNotification p)
+            "aria2.onDownloadError" -> (onDownloadError callbacks) (extractGidFromNotification p)
 
--- testWebsocketClient :: IO (W.Response BL.ByteString)
--- testWebsocketClient = do 
---   addUris ariaRPCUrl  ["http://www.vacationlabs.com"]
+extractGidFromNotification :: Value -> Aria2Gid
+extractGidFromNotification v = Aria2Gid $ T.unpack $ fromJustNote ("Unexpected params in notification " ++ (show v)) (v L.^? (L.nth 0) . (L.key "gid") . L._String)
+
+extractJsonRpcResult :: (FromJSON a) => Value -> a
+extractJsonRpcResult v = do
+  case (fromJSON v) of
+    Error s -> error s
+    Success x -> x
+
