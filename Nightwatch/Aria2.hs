@@ -27,19 +27,19 @@ import           Nightwatch.DBTypes
 import           Nightwatch.Types hiding (nextRequestId)
 import           Safe (fromJustNote)
 import           Data.Typeable
-import           Control.Monad.Catch
-import           Control.Exception
+-- import           Control.Monad.Catch
+-- import           Control.Exception
 import           Data.Aeson
 import           Data.Aeson.Types
 import qualified Control.Lens as L
 import qualified Data.Aeson.Lens as L
 import           Control.Concurrent
-import qualified Control.Concurrent.Async as A
+-- import qualified Control.Concurrent.Async as A
 import qualified Network.WebSockets as WS
 import           Control.Monad (forever)
-import           Control.Monad.IO.Class (liftIO, MonadIO)
+-- import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Data.Functor (void)
-import qualified Data.Map.Strict as M
+-- import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 
 ariaRPCPort = 9999

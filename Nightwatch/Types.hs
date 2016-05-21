@@ -29,10 +29,10 @@ module Nightwatch.Types (NightwatchCommand(..)
   ) where
 
 import qualified Data.Text           as T
-import qualified Data.Text.IO        as T
+-- -- -- -- import qualified Data.Text.IO        as T
 import Control.Concurrent.Chan(Chan)
 import Data.Aeson
-import Data.Aeson.Types
+-- -- -- -- import Data.Aeson.Types
 import GHC.Generics (Generic)
 import Database.Persist
 import Database.Persist.Sqlite
@@ -45,7 +45,7 @@ import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Ex
 import Data.UUID
 import qualified Data.UUID.V1 as UUIDv1
 import Data.Foldable(foldl')
-import Data.String(IsString)
+-- -- -- -- import Data.String(IsString)
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
@@ -133,6 +133,6 @@ nextRequestId = UUIDv1.nextUUID >>= \uuid ->
 -- parseRequestId = Just . id
 
 
-joinStrings :: [String] -> String -> String
-joinStrings lst sep = drop (length sep) $ foldl' (\memo x -> memo ++ sep ++ x) "" lst
+joinStrings :: String -> [String] -> String
+joinStrings sep lst = drop (length sep) $ foldl' (\memo x -> memo ++ sep ++ x) "" lst
 

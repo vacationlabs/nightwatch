@@ -28,6 +28,8 @@ module Nightwatch.DBTypes(User(..)
   ,Key(..)
   ,DownloadId(..)
   ,ConnectionPool
+  ,File(..)
+  ,Url(..)
   ,createUser
   ,createDownload
   ,fetchDownloadByGid
@@ -41,6 +43,8 @@ module Nightwatch.DBTypes(User(..)
   ,logIncomingTelegramMessage
   ,updateWithTgramOutgoingMsg
   ,logAria2Notification
+  ,updateDownloadWithFiles
+  ,getDownloadsByUserId
   ,SqlPersistM
   ,NwApp(..)
   ,Entity(..)
@@ -57,11 +61,8 @@ import           Database.Persist.TH
 import           Data.Time (UTCTime, getCurrentTime)
 import           Nightwatch.Types
 import           Control.Concurrent.Chan (Chan)
-import qualified Data.Text as T
-import           Control.Monad.Trans.Resource (runResourceT)
-import           Control.Monad.Logger (runStderrLoggingT)
 import qualified Nightwatch.TelegramTypes as TT
-import           Control.Concurrent (writeChan)
+import           Data.List(foldl', unfoldr, partition)
 
 -- import Nightwatch.DBInternal
 
@@ -106,12 +107,27 @@ Log
 Download
   userId UserId
   gid Aria2Gid
-  url URL
   logId LogId
+  parentId DownloadId Maybe
   createdAt UTCTime
   updatedAt UTCTime
   deriving Show
+
+File
+  downloadId DownloadId
+  path String
+  length Int
+  deriving Show
+
+Url
+  downloadId DownloadId
+  fileId FileId
+  url URL
+  deriving Show
 |]
+
+
+type ParentDownloadId = DownloadId
 
 -- NOTE: see note above.
 -- instance Timestamped User
@@ -135,8 +151,21 @@ createUser email name tgramUserId tgramUsername tgramChatId = (liftIO getCurrent
 -- createAria2RequestLog :: Maybe String -> Maybe UserId -> NwApp ()
 -- createAria2RequestLog request userId = (liftIO getCurrentTime) >>= (\time -> update logId [ LogAria2Request =. request, LogUserId =. userId ])
 
-createDownload :: URL -> Aria2Gid -> LogId -> UserId -> NwApp (Entity Download)
-createDownload url gid logId userId = (liftIO getCurrentTime) >>= (\time -> insertEntity Download{downloadUrl=url, downloadGid=gid, downloadLogId=logId, downloadUserId=userId, downloadCreatedAt=time, downloadUpdatedAt=time})
+createDownload :: Aria2Gid -> LogId -> UserId -> [(String, Integer, [URL])] -> Maybe ParentDownloadId -> NwApp (Entity Download)
+createDownload gid logId_ userId_ files parentId = do
+  time <- liftIO getCurrentTime
+  dloadE <- insertEntity Download{downloadGid=gid, downloadLogId=logId_, downloadUserId=userId_, downloadParentId=parentId, downloadCreatedAt=time, downloadUpdatedAt=time}
+  _ <- updateDownloadWithFiles (entityKey dloadE) files
+  return dloadE
+
+updateDownloadWithFiles :: DownloadId -> [(String, Integer, [URL])] -> NwApp([Entity File])
+updateDownloadWithFiles dloadId files = (sequence . (map $ insertFile dloadId)) files
+  where
+    insertFile :: DownloadId -> (String, Integer, [URL]) -> NwApp (Entity File)
+    insertFile dloadId (p, l, urls) = do
+      fileE <- insertEntity File{filePath=p, fileLength=(fromIntegral l), fileDownloadId=dloadId}
+      _ <- (sequence . (map (\u -> insertEntity Url{urlUrl=u, urlDownloadId=dloadId, urlFileId=(entityKey fileE)}))) urls
+      return fileE
 
 fetchDownloadByGid :: Aria2Gid -> NwApp (Maybe (Entity Download))
 fetchDownloadByGid gid = selectFirst [ DownloadGid ==. gid ] []
@@ -151,12 +180,12 @@ fetchUserByTelegramUserId :: TgramUserId -> NwApp (Maybe (Entity User))
 fetchUserByTelegramUserId tgramUserId = selectFirst [ UserTgramUserId ==. (Just tgramUserId) ] []
 
 fetchUserById :: UserId -> NwApp (Maybe User)
-fetchUserById userId = get userId
+fetchUserById userId_ = get userId_
 
 -- TODO: Lookup (chat_id $ chat $ msg) in DB to ensure that this chat has been
 -- authenticated in the past
 authenticateChat :: TgramChatId -> NwApp (Maybe (Entity User))
-authenticateChat chatId = selectFirst [UserTgramChatId ==. (Just chatId)] []
+authenticateChat chatId_ = selectFirst [UserTgramChatId ==. (Just chatId_)] []
 
 runDb :: ConnectionPool -> NwApp a -> IO a
 runDb pool operation = runSqlPool operation pool
@@ -171,10 +200,10 @@ blankLog :: IO Log
 blankLog = getCurrentTime >>= \time -> return Log{logRequestId=Nothing, logUserId=Nothing, logTgramUserId=Nothing, logTgramChatId=Nothing, logTgramIncomingText=Nothing, logTgramOutgoingText=Nothing, logNwCmd=Nothing, logAria2Request=Nothing, logAria2Response=Nothing, logCreatedAt=time, logUpdatedAt=time}
 
 logIncomingTelegramMessage :: TT.Message -> Maybe UserId -> Maybe NightwatchCommand -> NwApp (Entity Log)
-logIncomingTelegramMessage tgramMsg userId nwCmd = (liftIO blankLog) >>= (\log -> insertEntity log{logTgramUserId=(Just $ TT.user_id $ TT.from tgramMsg), logTgramChatId=(Just $ TT.chat_id $ TT.chat tgramMsg), logTgramIncomingText=(TT.text tgramMsg), logNwCmd=nwCmd, logUserId=userId})
+logIncomingTelegramMessage tgramMsg userId_ nwCmd = (liftIO blankLog) >>= (\log_ -> insertEntity log_{logTgramUserId=(Just $ TT.user_id $ TT.from tgramMsg), logTgramChatId=(Just $ TT.chat_id $ TT.chat tgramMsg), logTgramIncomingText=(TT.text tgramMsg), logNwCmd=nwCmd, logUserId=userId_})
 
 updateWithAria2Request :: LogId -> Aria2RequestId -> String -> NwApp ()
-updateWithAria2Request logId requestId req = (liftIO getCurrentTime) >>= (\time -> update logId [ LogRequestId =. (Just requestId), LogAria2Request =. (Just req), LogUpdatedAt =. time ])
+updateWithAria2Request logId_ requestId req = (liftIO getCurrentTime) >>= (\time -> update logId_ [ LogRequestId =. (Just requestId), LogAria2Request =. (Just req), LogUpdatedAt =. time ])
 
 updateWithAria2Response :: LogId -> String -> NwApp ()
 updateWithAria2Response requestId r = (liftIO getCurrentTime) >>= (\time -> update requestId [ LogAria2Response =. (Just r), LogUpdatedAt =. time ])
@@ -183,5 +212,26 @@ updateWithTgramOutgoingMsg :: LogId -> TelegramOutgoingMessage -> NwApp()
 updateWithTgramOutgoingMsg requestId msg = (liftIO getCurrentTime) >>= (\time -> update requestId [ LogTgramOutgoingText =. (Just $ message msg), LogTgramChatId =. (Just $ tg_chat_id msg), LogUpdatedAt =. time])
 
 logAria2Notification :: String -> NwApp (Entity Log)
-logAria2Notification notif = (liftIO blankLog) >>= (\log -> insertEntity log{logAria2Response=(Just notif)})
+logAria2Notification notif = (liftIO blankLog) >>= (\log_ -> insertEntity log_{logAria2Response=(Just notif)})
+
+getDownloadsByUserId :: Key User -> NwApp ([(Entity Download, [Entity File])])
+getDownloadsByUserId userId = do
+  dloadsE <- selectList [DownloadUserId ==. userId] [Desc DownloadUpdatedAt]
+  let dloadIds = map entityKey dloadsE
+  filesE <- selectList [FileDownloadId <-. dloadIds] [Asc FileDownloadId]
+  return $ unfoldr unfoldrHelper (dloadsE, filesE)
+  where
+    partitionChildren :: Key Download -> [Entity File] -> ([Entity File], [Entity File])
+    partitionChildren parentId children = partition (\childE -> (fileDownloadId $ entityVal childE) == parentId) children
+
+    unfoldrHelper :: ([Entity Download], [Entity File]) -> Maybe ((Entity Download, [Entity File]), ([Entity Download], [Entity File]))
+    unfoldrHelper ([], _) = Nothing
+    unfoldrHelper ((dloadE:dloadsE), filesE) = Just ((dloadE, matchingFiles), (dloadsE, nonMatchingFiles))
+      where (matchingFiles, nonMatchingFiles) = partitionChildren (entityKey dloadE) filesE
+
+    
+    -- return $ map (\dloadE -> (dloadE, selectList [FileDownloadId ==. (entityKey dloadE)] [Asc FileId])) dloadsE
+
+-- loadEfficiently :: (PersistStore backend, PersistEntity parent, PersistEntity child, backend ~ PersistEntityBackend child, MonadIO m) => (parent -> Maybe (Key child)) -> parents -> ReaderT backend m child
+-- loadEfficiently
 
