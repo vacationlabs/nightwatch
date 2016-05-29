@@ -1,23 +1,51 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE QuasiQuotes           #-}
 {-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TypeFamilies          #-}
 module Nightwatch.Webapp (startWebapp) where
 import Yesod
+import Yesod.Auth
+import Yesod.Auth.GoogleEmail2
+import Network.HTTP.Client.Conduit (Manager, newManager)
+import Data.Text (Text)
 
-data Nightwatch = Nightwatch
+data Nightwatch = Nightwatch {
+  httpManager :: Manager
+  }
 
 mkYesod "Nightwatch" [parseRoutes|
 / HomeR GET
+/auth AuthR Auth getAuth
 |]
 
 instance Yesod Nightwatch
 
+instance YesodAuth Nightwatch where
+  type AuthId Nightwatch = Text
+  getAuthId = return . Just . credsIdent
+  loginDest _ = HomeR
+  logoutDest _ = HomeR
+  authPlugins _ = [
+    authGoogleEmail googleClientId googleClientSecret
+    ]
+  authHttpManager = httpManager
+  maybeAuthId = lookupSession "_ID"
+
+instance RenderMessage Nightwatch FormMessage where
+  renderMessage _ _ = defaultFormMessage
+
 getHomeR :: Handler Html
-getHomeR = defaultLayout [whamlet|Hello World!|]
+getHomeR = defaultLayout [whamlet|
+                                 Hello World!
+                                 <a href=@{AuthR LoginR}>Go to the login page
+|]
 
 startWebapp :: IO ()
 startWebapp = do
-  warp 3000 Nightwatch
+  mgr <- newManager
+  warp 3000 $ Nightwatch mgr
 
+
+-- https://accounts.google.com/o/oauth2/auth?scope=email%20profile&state=rSFE1az77Up4gmD156336Vxz&redirect_uri=%2Fauth%2Fpage%2Fgoogleemail2%2Fcomplete&response_type=code&client_id=1045667944271-dnh31h9n4ul2i0q42tjirc7n7tk7k9jq.apps.googleusercontent.com&access_type=offline
 

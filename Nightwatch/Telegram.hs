@@ -1,27 +1,30 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric #-}
 module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..), AuthNightwatchCommand(..)) where
 import           Control.Concurrent
 import qualified Control.Concurrent.Async as A
 -- import           Control.Concurrent.Chan
 import           Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 import Control.Lens hiding(from)
-import           Control.Monad (forever, guard, liftM)
+import Data.Aeson.Lens
+import           Control.Monad (forever, guard, liftM, when)
 import           Control.Monad.IO.Class (liftIO, MonadIO)
--- import           Data.Aeson
+import           Data.Aeson
 -- import           Data.Aeson.Types
 import qualified Data.ByteString.Lazy as BL
 -- import qualified Data.ByteString.Lazy.Char8 as BL (pack, unpack)
 import           Data.Functor (void)
 -- import           Data.List (isPrefixOf, drop)
 -- import qualified Data.Map as M
--- import qualified Data.Text as T
+import qualified Data.Text as T
 -- import           Data.Text (Text, pack)
 -- import qualified Data.Text.IO as T
 -- import           Data.Time
 -- import           Data.Time.Clock.POSIX
 -- import           GHC.Generics (Generic)
-import           Network.Wreq
+import           Network.Wreq hiding (defaults)
+import qualified Network.Wreq as W(defaults)
+-- import Network.HTTP.Conduit(HttpException)
 -- import           Network.XmlRpc.Client
 import qualified Nightwatch.DBTypes as DB (message, chatId, User(..), authenticateChat)
 import           Nightwatch.DBTypes hiding (message, chatId, User(..))
@@ -37,7 +40,7 @@ import           Safe (fromJustNote)
 import           Text.Printf
 import           Data.Char (toUpper)
 import           Database.Persist.Sql (transactionSave)
-import           Data.List (foldl', unzip5)
+-- import           Data.List (foldl', unzip5)
 
 type Resp = Response TelegramResponse
 
@@ -318,6 +321,37 @@ statusHelper_ gid = do
       userId = (downloadUserId dload)
   user <- fmap (fromJustNote $ "Could not find User ID " ++ (show userId) ++ " in DB") (fetchUserById userId)
   return (statusResponse, userId, user, dloadId, dload)
+
+generateOAuthUserCode :: IO (OAuthCodeResponse)
+generateOAuthUserCode = do
+  r <- asJSON =<< post "https://accounts.google.com/o/oauth2/device/code" ["client_id" := googleClientId, "scope" := ("email profile" :: T.Text)]
+  return $ r ^. responseBody
+
+pollForOAuthTokens :: OAuthCodeResponse -> IO (OAuthAccessToken, OAuthRefreshToken)
+pollForOAuthTokens codeResponse =do
+  r <- (postWith
+        (W.defaults & checkStatus .~ (Just (\ _ _ _ -> Nothing)))
+        "https://www.googleapis.com/oauth2/v4/token"
+        ["client_id" := googleClientId,
+         "client_secret" := googleClientSecret,
+         "code" := (codeResponse ^. deviceCode),
+         "user_code" := (codeResponse ^. userCode),
+         "verification_url" := (codeResponse ^. verificationUrl),
+         "grant_type" := ("http://oauth.net/grant_type/device/1.0" :: T.Text)])
+  case (r ^. responseStatus ^. statusCode) of
+    200 -> do
+      j <- asJSON r
+      let pollResponse = (j ^. responseBody) :: OAuthTokenResponse
+      return (pollResponse ^. accessToken, pollResponse ^. refreshToken)
+
+    _ -> do
+      j <- asJSON r :: IO (Response Value)
+      let err = j ^. responseBody ^? (key "error")
+      when
+        (not ((err == Just "authorization_pending") || (err == Just "slow_down")))
+        (putStrLn $ "Unexpected response while polling for OAuth tokens " ++ (show r))
+      threadDelay $ 1000 * (codeResponse ^. interval)
+      pollForOAuthTokens codeResponse
 
 
 startTelegramBot :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
