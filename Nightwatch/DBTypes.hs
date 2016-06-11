@@ -86,6 +86,8 @@ User
   tgramUserId TgramUserId Maybe
   tgramUsername TgramUsername Maybe
   tgramChatId TgramChatId Maybe -- The last known ChatId from this user
+  accessToken OAuthAccessToken
+  refreshToken OAuthRefreshToken
   createdAt UTCTime
   updatedAt UTCTime
   deriving Show
@@ -145,8 +147,8 @@ type Aria2ChannelMessage = AuthNightwatchCommand
 type Aria2Channel = Chan Aria2ChannelMessage
 type NwApp = SqlPersistT IO
 
-createUser :: String -> Maybe String -> Maybe TgramUserId -> Maybe TgramUsername -> Maybe TgramChatId -> NwApp (Entity User)
-createUser email name tgramUserId tgramUsername tgramChatId = (liftIO getCurrentTime) >>= (\time -> insertEntity User{userName=name, userEmail=email, userTgramUserId=tgramUserId, userTgramUsername=tgramUsername, userTgramChatId=tgramChatId, userCreatedAt=time, userUpdatedAt=time})
+createUser :: String -> OAuthAccessToken -> OAuthRefreshToken -> Maybe String -> Maybe TgramUserId -> Maybe TgramUsername -> Maybe TgramChatId -> NwApp (Entity User)
+createUser email accessToken refreshToken name tgramUserId tgramUsername tgramChatId = (liftIO getCurrentTime) >>= (\time -> insertEntity User{userName=name, userEmail=email, userTgramUserId=tgramUserId, userTgramUsername=tgramUsername, userTgramChatId=tgramChatId, userCreatedAt=time, userUpdatedAt=time, userAccessToken=accessToken, userRefreshToken=refreshToken})
 
 -- createAria2RequestLog :: Maybe String -> Maybe UserId -> NwApp ()
 -- createAria2RequestLog request userId = (liftIO getCurrentTime) >>= (\time -> update logId [ LogAria2Request =. request, LogUserId =. userId ])

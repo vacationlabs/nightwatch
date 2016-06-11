@@ -26,6 +26,10 @@ module Nightwatch.Types (NightwatchCommand(..)
   ,nextRequestId
   ,joinStrings
   ,Generic
+  ,OAuthRefreshToken
+  ,OAuthAccessToken
+  ,googleClientId
+  ,googleClientSecret
   ) where
 
 import qualified Data.Text           as T
@@ -47,12 +51,22 @@ import qualified Data.UUID.V1 as UUIDv1
 import Data.Foldable(foldl')
 -- -- -- -- import Data.String(IsString)
 
+
+googleClientId :: T.Text
+googleClientId = "1045667944271-dnh31h9n4ul2i0q42tjirc7n7tk7k9jq.apps.googleusercontent.com"
+
+googleClientSecret :: T.Text
+googleClientSecret = "GcX5OviTB0uMjQHKpEXZaF4A"
+
+
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
 newtype URL = URL String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
 newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
 
 type Aria2RequestId = String
+type OAuthRefreshToken = String
+type OAuthAccessToken = String
 
 newtype TgramUserId = TgramUserId Integer deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
 newtype TgramFirstName = TgramFirstName String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)

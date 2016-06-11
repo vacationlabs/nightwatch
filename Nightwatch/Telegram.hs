@@ -12,6 +12,7 @@ import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Data.Aeson
 -- import           Data.Aeson.Types
 import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Char8 as BS (pack, unpack)
 -- import qualified Data.ByteString.Lazy.Char8 as BL (pack, unpack)
 import           Data.Functor (void)
 -- import           Data.List (isPrefixOf, drop)
@@ -40,7 +41,7 @@ import           Safe (fromJustNote)
 import           Text.Printf
 import           Data.Char (toUpper)
 import           Database.Persist.Sql (transactionSave)
--- import           Data.List (foldl', unzip5)
+import           Data.List (foldl')
 
 type Resp = Response TelegramResponse
 
@@ -105,7 +106,7 @@ sendMessage tgMsg = do
 
 findLastUpdateId :: Integer -> [Update] -> Integer
 findLastUpdateId lastUpdateId [] = lastUpdateId
-findLastUpdateId lastUpdateId updates = (1+) $ foldl (\m update -> if (update_id update) > m then (update_id update) else m) lastUpdateId updates
+findLastUpdateId lastUpdateId updates = (1+) $ foldl' (\m update -> if (update_id update) > m then (update_id update) else m) lastUpdateId updates
 
 doPollLoop tgIncomingChan lastUpdateId = do
   threadDelay (10^6)
@@ -115,15 +116,14 @@ doPollLoop tgIncomingChan lastUpdateId = do
   writeList2Chan tgIncomingChan incomingUpdates
   doPollLoop tgIncomingChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
 
-processIncomingMessages :: ConnectionPool -> Chan Update -> Aria2Channel -> IO ()
-processIncomingMessages pool tgIncomingChan aria2Chan = forever $ do
-  putStrLn "STARTING processIncomingMessages"
+processIncomingMessages :: ConnectionPool -> Chan Update -> IO ()
+processIncomingMessages pool tgIncomingChan = forever $ do
   update <- readChan tgIncomingChan
   let msg = message update
   let chatId = chat_id $ chat $ msg
   user <- runDb pool $ DB.authenticateChat chatId
   case user of
-    Nothing -> sendMessage TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText "Cannot process command. You are not an authenticated user.")}
+    Nothing -> void $ forkIO $ runDb pool $ oAuthProcess chatId (user_id $ from $ msg) (user_username $ from $ msg)
     Just userE -> do
       let nwCmd = parseIncomingMessage (text msg)
           logTgram :: NwApp (Entity Log)
@@ -133,6 +133,39 @@ processIncomingMessages pool tgIncomingChan aria2Chan = forever $ do
         (StatusCommand gid) -> logTgram >>= (\logE -> onStatusCommand userE logE gid)
         (PauseCommand gid) -> logTgram >>= (\logE -> onPauseCommand userE logE gid)
         _ -> liftIO $ sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")}
+
+oAuthProcess :: TgramChatId -> TgramUserId -> Maybe TgramUsername -> NwApp ()
+oAuthProcess chatId tgramUserId tgramUsername = do
+  (accessToken, refreshToken, e, d, n) <- liftIO oAuthProcess_
+  case (e, d) of
+    (Just email, Just "vacationlabs.com") -> do
+      createUser email accessToken refreshToken n (Just tgramUserId) tgramUsername (Just chatId)
+      liftIO $ sendMsg_ $ "Welcome " ++ email
+    (Just email, _) -> liftIO $ sendMsg_ "Sorry, can't let you in. Doesn't look like you authenticated yourself with a VL email ID."
+    (Nothing, _) -> liftIO $ sendMsg_ "Whoops! Something's gone wrong. I didn't get access to your email ID after authentication."
+    (_, _) -> liftIO $ sendMsg_ "Whoops! Something's wrong. An expected field from the authentication response is missing."
+      
+  where
+    sendMsg_ :: String -> IO ()
+    sendMsg_ msg = sendMessage TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=TgramMsgText msg}
+    
+    oAuthProcess_ :: IO (OAuthAccessToken, OAuthRefreshToken, Maybe String, Maybe String, Maybe String)
+    oAuthProcess_ = do 
+      codeResp <- generateOAuthUserCode
+      let msg = (printf
+                 "Cannot process command because you have not authenticated yourself.\n===\nPlease visit %s, signin with your VL account and enter the code: %s\n---\nGo ahead, I'll wait for another %d minutes for you to complete this."
+                 (codeResp ^. verificationUrl)
+                 (codeResp ^. userCode)
+                 (div (codeResp ^. expiresIn) 60))
+      sendMessage TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=TgramMsgText msg}
+      (accessToken, refreshToken) <- pollForOAuthTokens codeResp
+      resp <- asValue =<< getWith (W.defaults & header "Authorization" .~ [BS.pack $ "Bearer " ++ accessToken]) "https://www.googleapis.com/plus/v1/people/me"
+      let body = resp ^. responseBody
+          domain = body ^? (key "domain") . _String
+          name = body ^? (key "displayName") . _String
+          -- TODO: This might not get the right email
+          email = body ^? (key "emails") . (nth 0) . (key "value") . _String
+      return (accessToken, refreshToken, fmap T.unpack email, fmap T.unpack domain, fmap T.unpack name)
 
 onPauseCommand :: Entity DB.User -> Entity Log -> Aria2Gid -> NwApp ()
 onPauseCommand userE logE gid = do
@@ -210,7 +243,7 @@ humanizeStatusResponse res = (printf "%s | %s | %s%s\n===\n%s"
     statusUpcase = (map toUpper (A2.st_status res))
     downloadSpeed = A2.st_downloadSpeed res
     remainingLength = ((A2.st_totalLength res) - (A2.st_completedLength res))
-    etaSeconds :: Integer
+    etaSeconds :: Integer 
     etaSeconds = remainingLength `div` downloadSpeed
     (Aria2Gid gidS) = (A2.st_gid res)
     downloadedStringFragment :: String
@@ -259,7 +292,7 @@ downloadUriSummary res = printf "[%s] %s" (A2.gu_status res) (show $ A2.gu_uri r
 --  sendCannedResponse tgIncomingChan
 
 setLastUpdateId updateId = do
-  writeFile "./last-update-id" (show updateId)
+  writeFile "/Users/saurabhnanda/projects/nightwatch/xslast-update-id" (show updateId)
   return updateId
 
 getLastUpdateId = do
@@ -328,36 +361,55 @@ generateOAuthUserCode = do
   return $ r ^. responseBody
 
 pollForOAuthTokens :: OAuthCodeResponse -> IO (OAuthAccessToken, OAuthRefreshToken)
-pollForOAuthTokens codeResponse =do
-  r <- (postWith
-        (W.defaults & checkStatus .~ (Just (\ _ _ _ -> Nothing)))
-        "https://www.googleapis.com/oauth2/v4/token"
-        ["client_id" := googleClientId,
-         "client_secret" := googleClientSecret,
-         "code" := (codeResponse ^. deviceCode),
-         "user_code" := (codeResponse ^. userCode),
-         "verification_url" := (codeResponse ^. verificationUrl),
-         "grant_type" := ("http://oauth.net/grant_type/device/1.0" :: T.Text)])
-  case (r ^. responseStatus ^. statusCode) of
-    200 -> do
-      j <- asJSON r
-      let pollResponse = (j ^. responseBody) :: OAuthTokenResponse
-      return (pollResponse ^. accessToken, pollResponse ^. refreshToken)
+pollForOAuthTokens codeResponse = if (codeResponse ^. expiresIn) < 0 then
+                                    error $ "OAuth token polling timed out " ++ (show codeResponse)
+                                  else
+                                    catch pollForOAuthTokens_ errorHandler 
 
-    _ -> do
-      j <- asJSON r :: IO (Response Value)
-      let err = j ^. responseBody ^? (key "error")
-      when
-        (not ((err == Just "authorization_pending") || (err == Just "slow_down")))
-        (putStrLn $ "Unexpected response while polling for OAuth tokens " ++ (show r))
+  where
+    errorHandler :: SomeException -> IO (OAuthAccessToken, OAuthRefreshToken)
+    errorHandler e = do
+      putStrLn $ "Error while polling OAuth tokens (probably non-HTTP related) "  ++ (show e)
+      retryPoll
+
+    pollForOAuthTokens_ :: IO (OAuthAccessToken, OAuthRefreshToken)
+    pollForOAuthTokens_ = do
+      r <- (postWith
+            -- NOTE: This is required so that Wreq doesn't throw it's stupid
+            -- exception for non-200 responses.
+            (W.defaults & checkStatus .~ (Just (\ _ _ _ -> Nothing))) 
+            "https://www.googleapis.com/oauth2/v4/token"
+            ["client_id" := googleClientId,
+             "client_secret" := googleClientSecret,
+             "code" := (codeResponse ^. deviceCode),
+             "user_code" := (codeResponse ^. userCode),
+             "verification_url" := (codeResponse ^. verificationUrl),
+             "grant_type" := ("http://oauth.net/grant_type/device/1.0" :: T.Text)])
+      case (r ^. responseStatus ^. statusCode) of
+        200 -> do
+          j <- asJSON r
+          let pollResponse = (j ^. responseBody) :: OAuthTokenResponse
+          return (pollResponse ^. accessToken, pollResponse ^. refreshToken)
+  
+        _ -> do
+          j <- asJSON r :: IO (Response Value)
+          let err = j ^. responseBody ^? (key "error")
+          case err of
+            Just "expired_token" -> error $ "OAuth token polling timed out " ++ (show codeResponse)
+            Just "authorization_pending" -> return ()
+            Just "slow_down" -> return ()
+            _ -> putStrLn $ "Unexpected response while polling for OAuth tokens " ++ (show r)
+          retryPoll
+
+    retryPoll = do
       threadDelay $ 1000 * (codeResponse ^. interval)
-      pollForOAuthTokens codeResponse
+      pollForOAuthTokens (over expiresIn (\x -> x - (codeResponse ^. interval)) codeResponse)
 
 
 startTelegramBot :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
 startTelegramBot pool aria2Chan tgOutChan = do
   tgIncomingChan <- newChan
-  _ <- forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan aria2Chan)
+  _ <- forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan)
   _ <- forkIO $ forever $ logAllExceptions "Error in doPollLoop: " (doPollLoop tgIncomingChan =<< getLastUpdateId)
   _ <- forkIO $ A2.startWebsocketClient ariaRPCHost ariaRPCPort A2.defaultAria2Callbacks{
     A2.onDownloadStart=(onAria2Notification pool),

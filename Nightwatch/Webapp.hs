@@ -9,6 +9,7 @@ import Yesod.Auth
 import Yesod.Auth.GoogleEmail2
 import Network.HTTP.Client.Conduit (Manager, newManager)
 import Data.Text (Text)
+import Nightwatch.Types
 
 data Nightwatch = Nightwatch {
   httpManager :: Manager
