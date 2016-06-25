@@ -7,7 +7,7 @@ import qualified Control.Concurrent.Async as A
 import           Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 import Control.Lens hiding(from)
 import Data.Aeson.Lens
-import           Control.Monad (forever, guard, liftM, when)
+import           Control.Monad (forever, guard, liftM, when, zipWithM)
 import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Data.Aeson
 -- import           Data.Aeson.Types
@@ -52,9 +52,9 @@ apiBaseUrl nwConfig = "https://api.telegram.org/bot" ++ (nwConfig ^. tgramBotTok
 ariaRPCPort = 9999
 ariaRPCHost = "localhost"
 ariaRPCUrl = printf "http://%s:%d/jsonrpc" ariaRPCHost ariaRPCPort
-aria2Command = "/Users/saurabhnanda/projects/nightwatch/aria2-1.19.3/bin/aria2c"
-aria2DownloadDir = "./downloads"
-aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
+-- aria2Command = 
+-- aria2DownloadDir = "./downloads"
+-- aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
 
 
 parseIncomingMessage :: Maybe TgramMsgText -> NightwatchCommand
@@ -304,17 +304,17 @@ getLastUpdateId = do
     [] -> return 0 -- Probably not a good idea
     [(y, s)] -> return y
 
-startAria2_ = do
+startAria2_ nwConfig = do
   putStrLn "==> Starting Aria2"
-  (_, _, _, processHandle) <- createProcess (proc aria2Command aria2Args)
+  let aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ (nwConfig ^. aria2DownloadDir)] 
+  (_, _, _, processHandle) <- createProcess $ proc (nwConfig ^. aria2Command) aria2Args
   return processHandle
 
-ensureAria2Running :: IO a
-ensureAria2Running = do
-  ph <- startAria2_
+ensureAria2Running :: NwConfig -> IO a
+ensureAria2Running nwConfig = forever $ do
+  ph <- startAria2_ nwConfig
   exitCode <- waitForProcess ph
   putStrLn $ "ERROR: Aria2 process died mysteriously: " ++ (show exitCode)
-  ensureAria2Running
 
 processOutgoingMessages :: NwConfig -> IO ()
 processOutgoingMessages nwConfig = do
@@ -323,22 +323,40 @@ processOutgoingMessages nwConfig = do
   sendMessage nwConfig tgMsg
   processOutgoingMessages nwConfig
 
+-- sendDownloadLinkToUser :: NwConfig -> A2.StatusResponse -> DB.User -> Download -> IO ()
+-- sendDownloadLinkToUser nwConfig statusResponse user dload = do
+--   let tgramChatId = fromJustNote "Cannot notify user because he/she doesn't have a tgramChatId" $ DB.userTgramChatId user
+--       msg = TgramMsgText (printf "%s\n===\nDownload it from: %s"
+--                           (humanizeStatusResponse statusResponse)
+--                           _fetchDownloadLink)
+--   sendMessage nwConfig TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=msg}
+
 onDownloadComplete :: NwConfig -> Aria2Gid -> IO ()
 onDownloadComplete nwConfig gid = do
   let pool = nwConfig ^. dbPool
       sendMsg = sendMessage nwConfig
+
+  -- First, let's check what this GID was all about, read from the DB, and make
+  -- a tellStatus call to check what were the results of this download (we're
+  -- interested in seeing if it resulted in more downloads being queued)
   (statusResponse, userId, user, dloadId, dload) <- runDb pool $ statusHelper_ gid
   let tgramChatId = fromJustNote "Cannot notify user because he/she doesn't have a tgramChatId" $ DB.userTgramChatId user
       (Aria2Gid gidS) = gid
+
+  -- Notiy the user that this download has been completed
   sendMessage nwConfig TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
   case (A2.st_followedBy statusResponse) of
     Nothing -> return ()
     Just [] -> return ()
     Just gids -> do
+
+      -- Now, make tellStatus calls on any downloads that have been created as a
+      -- result of this download being finished (happens mostly with torrent
+      -- files)
       statusResponses <- A.mapConcurrently (A2.tellStatus ariaRPCUrl) gids
-      newDloadsE <- runDb pool $ (sequence . (map $ saveDownload userId dloadId (downloadLogId dload))) statusResponses
+      newDloadsE <- runDb pool $ mapM (saveDownload userId dloadId (downloadLogId dload)) statusResponses
       sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%s | %d downloads queued" gidS (length newDloadsE))}
-      void $ sequence $ zipWith (\sr idx -> sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%d of %d\n===\n%s" idx (length statusResponses) (humanizeStatusResponse sr))}) statusResponses ([1..]::[Int])
+      void $ zipWithM (\sr idx -> sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%d of %d\n===\n%s" idx (length statusResponses) (humanizeStatusResponse sr))}) statusResponses ([1..]::[Int])
     where
       saveDownload :: UserId -> DownloadId -> LogId -> A2.StatusResponse -> NwApp(Entity Download)
       saveDownload userId parentDloadId logId sr = do
@@ -427,5 +445,5 @@ startTelegramBot nwConfig = do
     }
   return ()
 
-startAria2 :: IO ()
-startAria2 = void $ forkIO $ forever ensureAria2Running
+startAria2 :: NwConfig -> IO ()
+startAria2 nwConfig = void $ forkIO $ forever $ ensureAria2Running nwConfig

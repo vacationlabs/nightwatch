@@ -34,8 +34,10 @@ main = runStderrLoggingT $ withSqlitePool "nightwatch.db" 5 $ \pool -> liftIO $ 
         & tgramBotToken .~ botToken
         & dbPool .~ pool
         & tgramOutgoingChannel .~ tgOutChan
+        & aria2Command .~ "/Users/saurabhnanda/projects/nightwatch/aria2-1.19.3/bin/aria2c"
+        & aria2DownloadDir .~ "/Users/saurabhnanda/projects/nightwatch/downloads"
   -- runMigrations pool
-  startAria2
+  startAria2 nwConfig
   startTelegramBot nwConfig
   startWebapp nwConfig
 

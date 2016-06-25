@@ -58,6 +58,8 @@ module Nightwatch.DBTypes(User(..)
   ,tgramBotToken
   ,dbPool
   ,tgramOutgoingChannel
+  ,aria2Command
+  ,aria2DownloadDir
   ,NwConfig
   ,def 
   ) where
@@ -74,6 +76,7 @@ import Control.Monad.Reader
 import qualified Data.Text as T
 import Data.Default
 import Control.Lens
+
 
 -- import Nightwatch.DBInternal
 
@@ -159,7 +162,9 @@ data NwConfig = NwConfig {
   _googleClientSecret :: T.Text,
   _tgramBotToken :: String,
   _dbPool :: ConnectionPool,
-  _tgramOutgoingChannel :: TelegramOutgoingChannel
+  _tgramOutgoingChannel :: TelegramOutgoingChannel,
+  _aria2Command :: String,
+  _aria2DownloadDir :: String
   }
 $(makeLenses ''NwConfig)
 instance Default NwConfig where

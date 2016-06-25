@@ -59,6 +59,8 @@ import Data.Foldable(foldl')
 -- googleClientSecret = "GcX5OviTB0uMjQHKpEXZaF4A"
 
 
+
+
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
 newtype URL = URL String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
