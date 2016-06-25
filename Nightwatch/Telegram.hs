@@ -45,12 +45,14 @@ import           Data.List (foldl')
 
 type Resp = Response TelegramResponse
 
-botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
-apiBaseUrl = "https://api.telegram.org/bot" ++ botToken
+-- botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
+apiBaseUrl :: NwConfig -> String
+apiBaseUrl nwConfig = "https://api.telegram.org/bot" ++ (nwConfig ^. tgramBotToken)
+
 ariaRPCPort = 9999
 ariaRPCHost = "localhost"
 ariaRPCUrl = printf "http://%s:%d/jsonrpc" ariaRPCHost ariaRPCPort
-aria2Command = "./aria2-1.19.3/bin/aria2c"
+aria2Command = "/Users/saurabhnanda/projects/nightwatch/aria2-1.19.3/bin/aria2c"
 aria2DownloadDir = "./downloads"
 aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
 
@@ -74,19 +76,19 @@ parseIncomingMessage (Just (TgramMsgText inp))
 --     Nothing -> return UnauthenticatedCommand
 --     Just u -> return AuthNightwatchCommand{command=(parseIncomingMessage $ text msg), userId=(entityKey u), DB.chatId=chatId}
 
-getUpdates :: (Num a, Show a) => Maybe a -> IO (Response BL.ByteString)
-getUpdates Nothing = getUpdates (Just 0)
-getUpdates (Just offset) = do
-  putStrLn (apiBaseUrl ++ "/getUpdates?offset=" ++ (show offset))
-  get (apiBaseUrl ++ "/getUpdates?offset=" ++ (show offset))
+getUpdates :: (Num a, Show a) => NwConfig -> Maybe a -> IO (Response BL.ByteString)
+getUpdates nwConfig Nothing = getUpdates nwConfig (Just 0)
+getUpdates nwConfig (Just offset) = do
+--  putStrLn (apiBaseUrl ++ "/getUpdates?offset=" ++ (show offset))
+  get $ (apiBaseUrl nwConfig) ++ "/getUpdates?offset=" ++ (show offset)
 
-getUpdatesAsJSON offset = do
-  asJSON =<< (getUpdates offset) :: IO Resp
+-- getUpdatesAsJSON offset = do
+--  asJSON =<< (getUpdates nwConfig offset) :: IO Resp
 
-sendMessage :: TelegramOutgoingMessage -> IO ()
-sendMessage tgMsg = do
+sendMessage :: NwConfig -> TelegramOutgoingMessage -> IO ()
+sendMessage nwConfig tgMsg = do
   putStrLn $ "Sending to " ++ (show tgMsg)
-  (void (post (apiBaseUrl ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (DB.message tgMsg)])) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
+  (void (post ((apiBaseUrl nwConfig) ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (DB.message tgMsg)])) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
     
 
 -- TODO: There's probably a better way to do this
@@ -108,34 +110,35 @@ findLastUpdateId :: Integer -> [Update] -> Integer
 findLastUpdateId lastUpdateId [] = lastUpdateId
 findLastUpdateId lastUpdateId updates = (1+) $ foldl' (\m update -> if (update_id update) > m then (update_id update) else m) lastUpdateId updates
 
-doPollLoop tgIncomingChan lastUpdateId = do
+doPollLoop nwConfig tgIncomingChan lastUpdateId = do
   threadDelay (10^6)
-  r <- asJSON =<< (getUpdates (Just lastUpdateId)) :: IO Resp
+  r <- asJSON =<< (getUpdates nwConfig (Just lastUpdateId)) :: IO Resp
   let incomingUpdates = (result $ r ^. responseBody)
   putStrLn $ "Will process " ++ (show incomingUpdates)
   writeList2Chan tgIncomingChan incomingUpdates
-  doPollLoop tgIncomingChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
+  doPollLoop nwConfig tgIncomingChan =<< setLastUpdateId (findLastUpdateId lastUpdateId incomingUpdates)
 
-processIncomingMessages :: ConnectionPool -> Chan Update -> IO ()
-processIncomingMessages pool tgIncomingChan = forever $ do
+processIncomingMessages :: NwConfig -> Chan Update -> IO ()
+processIncomingMessages nwConfig tgIncomingChan = forever $ do
+  let pool = nwConfig ^. dbPool
   update <- readChan tgIncomingChan
   let msg = message update
   let chatId = chat_id $ chat $ msg
   user <- runDb pool $ DB.authenticateChat chatId
   case user of
-    Nothing -> void $ forkIO $ runDb pool $ oAuthProcess chatId (user_id $ from $ msg) (user_username $ from $ msg)
+    Nothing -> void $ forkIO $ runDb pool $ oAuthProcess nwConfig chatId (user_id $ from $ msg) (user_username $ from $ msg)
     Just userE -> do
       let nwCmd = parseIncomingMessage (text msg)
           logTgram :: NwApp (Entity Log)
           logTgram = (logIncomingTelegramMessage msg  (Just $ entityKey userE) (Just nwCmd))
       void $ forkIO $ runDb pool $ case nwCmd of
-        (DownloadCommand url) -> logTgram >>= (\logE -> onDownloadCommand userE logE url)
-        (StatusCommand gid) -> logTgram >>= (\logE -> onStatusCommand userE logE gid)
-        (PauseCommand gid) -> logTgram >>= (\logE -> onPauseCommand userE logE gid)
-        _ -> liftIO $ sendMessage $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")}
+        (DownloadCommand url) -> logTgram >>= (\logE -> onDownloadCommand nwConfig userE logE url)
+        (StatusCommand gid) -> logTgram >>= (\logE -> onStatusCommand nwConfig userE logE gid)
+        (PauseCommand gid) -> logTgram >>= (\logE -> onPauseCommand nwConfig userE logE gid)
+        _ -> liftIO $ sendMessage nwConfig $ TelegramOutgoingMessage {tg_chat_id=(chat_id $ chat $ message update), DB.message=(TgramMsgText "What language, dost thou speaketh? Command me with: download <url>")}
 
-oAuthProcess :: TgramChatId -> TgramUserId -> Maybe TgramUsername -> NwApp ()
-oAuthProcess chatId tgramUserId tgramUsername = do
+oAuthProcess :: NwConfig -> TgramChatId -> TgramUserId -> Maybe TgramUsername -> NwApp ()
+oAuthProcess nwConfig chatId tgramUserId tgramUsername = do
   (accessToken, refreshToken, e, d, n) <- liftIO oAuthProcess_
   case (e, d) of
     (Just email, Just "vacationlabs.com") -> do
@@ -147,18 +150,18 @@ oAuthProcess chatId tgramUserId tgramUsername = do
       
   where
     sendMsg_ :: String -> IO ()
-    sendMsg_ msg = sendMessage TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=TgramMsgText msg}
+    sendMsg_ msg = sendMessage nwConfig TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=TgramMsgText msg}
     
     oAuthProcess_ :: IO (OAuthAccessToken, OAuthRefreshToken, Maybe String, Maybe String, Maybe String)
     oAuthProcess_ = do 
-      codeResp <- generateOAuthUserCode
+      codeResp <- generateOAuthUserCode nwConfig
       let msg = (printf
                  "Cannot process command because you have not authenticated yourself.\n===\nPlease visit %s, signin with your VL account and enter the code: %s\n---\nGo ahead, I'll wait for another %d minutes for you to complete this."
                  (codeResp ^. verificationUrl)
                  (codeResp ^. userCode)
                  (div (codeResp ^. expiresIn) 60))
-      sendMessage TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=TgramMsgText msg}
-      (accessToken, refreshToken) <- pollForOAuthTokens codeResp
+      sendMessage nwConfig TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=TgramMsgText msg}
+      (accessToken, refreshToken) <- pollForOAuthTokens nwConfig codeResp
       resp <- asValue =<< getWith (W.defaults & header "Authorization" .~ [BS.pack $ "Bearer " ++ accessToken]) "https://www.googleapis.com/plus/v1/people/me"
       let body = resp ^. responseBody
           domain = body ^? (key "domain") . _String
@@ -167,8 +170,8 @@ oAuthProcess chatId tgramUserId tgramUsername = do
           email = body ^? (key "emails") . (nth 0) . (key "value") . _String
       return (accessToken, refreshToken, fmap T.unpack email, fmap T.unpack domain, fmap T.unpack name)
 
-onPauseCommand :: Entity DB.User -> Entity Log -> Aria2Gid -> NwApp ()
-onPauseCommand userE logE gid = do
+onPauseCommand :: NwConfig -> Entity DB.User -> Entity Log -> Aria2Gid -> NwApp ()
+onPauseCommand nwConfig userE logE gid = do
   let (Aria2Gid gidS) = gid
       logId = entityKey logE
       log = entityVal logE
@@ -178,10 +181,10 @@ onPauseCommand userE logE gid = do
   -- NOTE: Not bothered about the respone of the pause command. It's not
   -- interesting.
   _ <- liftIO $ A2.pause ariaRPCUrl gid
-  onStatusCommand userE logE gid
+  onStatusCommand nwConfig userE logE gid
 
-onStatusCommand :: Entity DB.User -> Entity Log -> Aria2Gid -> NwApp ()
-onStatusCommand userE logE gid = do
+onStatusCommand :: NwConfig -> Entity DB.User -> Entity Log -> Aria2Gid -> NwApp ()
+onStatusCommand nwConfig userE logE gid = do
   dloadE <- fmap (fromJustNote $ "Could not find download by GID in DB " ++ (show gid)) (fetchDownloadByGid gid)
   let (Aria2Gid gidS) = gid
       logId = entityKey logE
@@ -192,11 +195,11 @@ onStatusCommand userE logE gid = do
       -- url = downloadUrl $ entityVal dloadE
   statusResponse <- liftIO $ A2.tellStatus ariaRPCUrl gid
   updateWithAria2Response logId (show statusResponse)
-  logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
+  logAndSendTgramMessage nwConfig logId TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
 
 
-onDownloadCommand :: Entity DB.User -> Entity Log -> URL -> NwApp ()
-onDownloadCommand userE logE url = do
+onDownloadCommand :: NwConfig -> Entity DB.User -> Entity Log -> URL -> NwApp ()
+onDownloadCommand nwConfig userE logE url = do
   let (URL urlS) = url
       logId = entityKey logE
       log = entityVal logE
@@ -211,16 +214,16 @@ onDownloadCommand userE logE url = do
   (statusResponse, _, _, _, _) <- statusHelper_ gid
   _ <- updateDownloadWithFiles (entityKey dloadE) $ fileHelper_ (A2.st_files statusResponse)
   transactionSave
-  logAndSendTgramMessage logId TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText $ "Download queued. ID=" ++ gidS ++ ". You can use that to check the status, pause, or stop the download. eg. status " ++ gidS)}
+  logAndSendTgramMessage nwConfig logId TelegramOutgoingMessage{tg_chat_id=chatId, DB.message=(TgramMsgText $ "Download queued. ID=" ++ gidS ++ ". You can use that to check the status, pause, or stop the download. eg. status " ++ gidS)}
 
 
 fileHelper_ :: [A2.GetFilesResponse] -> [(String, Integer, [URL])]
 fileHelper_ fileResponse = map (\f -> (A2.gf_path f, A2.gf_length f, map A2.gu_uri $ A2.gf_uris f)) fileResponse
 
-logAndSendTgramMessage :: LogId -> TelegramOutgoingMessage -> NwApp()
-logAndSendTgramMessage logId msg = do
+logAndSendTgramMessage :: NwConfig -> LogId -> TelegramOutgoingMessage -> NwApp()
+logAndSendTgramMessage nwConfig logId msg = do
   updateWithTgramOutgoingMsg logId msg
-  liftIO $ sendMessage msg
+  liftIO $ sendMessage nwConfig msg
 
 
 humanizeBytes :: Integer -> String
@@ -313,26 +316,29 @@ ensureAria2Running = do
   putStrLn $ "ERROR: Aria2 process died mysteriously: " ++ (show exitCode)
   ensureAria2Running
 
-processOutgoingMessages :: TelegramOutgoingChannel -> IO ()
-processOutgoingMessages tgOutChan = do 
+processOutgoingMessages :: NwConfig -> IO ()
+processOutgoingMessages nwConfig = do
+  let tgOutChan = nwConfig ^. tgramOutgoingChannel
   tgMsg <- readChan tgOutChan
-  sendMessage tgMsg
-  processOutgoingMessages tgOutChan
+  sendMessage nwConfig tgMsg
+  processOutgoingMessages nwConfig
 
-onDownloadComplete :: ConnectionPool -> Aria2Gid -> IO ()
-onDownloadComplete pool gid = do
+onDownloadComplete :: NwConfig -> Aria2Gid -> IO ()
+onDownloadComplete nwConfig gid = do
+  let pool = nwConfig ^. dbPool
+      sendMsg = sendMessage nwConfig
   (statusResponse, userId, user, dloadId, dload) <- runDb pool $ statusHelper_ gid
   let tgramChatId = fromJustNote "Cannot notify user because he/she doesn't have a tgramChatId" $ DB.userTgramChatId user
       (Aria2Gid gidS) = gid
-  sendMessage TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
+  sendMessage nwConfig TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
   case (A2.st_followedBy statusResponse) of
     Nothing -> return ()
     Just [] -> return ()
     Just gids -> do
       statusResponses <- A.mapConcurrently (A2.tellStatus ariaRPCUrl) gids
       newDloadsE <- runDb pool $ (sequence . (map $ saveDownload userId dloadId (downloadLogId dload))) statusResponses
-      sendMessage TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%s | %d downloads queued" gidS (length newDloadsE))}
-      void $ sequence $ zipWith (\sr idx -> sendMessage TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%d of %d\n===\n%s" idx (length statusResponses) (humanizeStatusResponse sr))}) statusResponses ([1..]::[Int])
+      sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%s | %d downloads queued" gidS (length newDloadsE))}
+      void $ sequence $ zipWith (\sr idx -> sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%d of %d\n===\n%s" idx (length statusResponses) (humanizeStatusResponse sr))}) statusResponses ([1..]::[Int])
     where
       saveDownload :: UserId -> DownloadId -> LogId -> A2.StatusResponse -> NwApp(Entity Download)
       saveDownload userId parentDloadId logId sr = do
@@ -340,10 +346,10 @@ onDownloadComplete pool gid = do
         _ <- updateDownloadWithFiles (entityKey dloadE) $ fileHelper_ (A2.st_files sr)
         return dloadE
 
-onAria2Notification :: ConnectionPool -> Aria2Gid -> IO ()
-onAria2Notification pool gid = do
-  (statusResponse, userId, user, dloadId, dload) <- runDb pool $ statusHelper_ gid
-  sendMessage TelegramOutgoingMessage{tg_chat_id=(fromJustNote "Cannot notify user because he/she doesn't have a tgramChatId" $ DB.userTgramChatId user), DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
+onAria2Notification :: NwConfig -> Aria2Gid -> IO ()
+onAria2Notification nwConfig gid = do
+  (statusResponse, userId, user, dloadId, dload) <- runDb (nwConfig ^. dbPool) $ statusHelper_ gid
+  sendMessage nwConfig TelegramOutgoingMessage{tg_chat_id=(fromJustNote "Cannot notify user because he/she doesn't have a tgramChatId" $ DB.userTgramChatId user), DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
 
 statusHelper_ :: Aria2Gid -> NwApp (A2.StatusResponse, Key DB.User, DB.User, Key Download, Download)
 statusHelper_ gid = do
@@ -355,13 +361,13 @@ statusHelper_ gid = do
   user <- fmap (fromJustNote $ "Could not find User ID " ++ (show userId) ++ " in DB") (fetchUserById userId)
   return (statusResponse, userId, user, dloadId, dload)
 
-generateOAuthUserCode :: IO (OAuthCodeResponse)
-generateOAuthUserCode = do
-  r <- asJSON =<< post "https://accounts.google.com/o/oauth2/device/code" ["client_id" := googleClientId, "scope" := ("email profile" :: T.Text)]
+generateOAuthUserCode :: NwConfig -> IO OAuthCodeResponse
+generateOAuthUserCode nwConfig = do
+  r <- asJSON =<< post "https://accounts.google.com/o/oauth2/device/code" ["client_id" := (nwConfig ^. googleClientId), "scope" := ("email profile" :: T.Text)]
   return $ r ^. responseBody
 
-pollForOAuthTokens :: OAuthCodeResponse -> IO (OAuthAccessToken, OAuthRefreshToken)
-pollForOAuthTokens codeResponse = if (codeResponse ^. expiresIn) < 0 then
+pollForOAuthTokens :: NwConfig -> OAuthCodeResponse -> IO (OAuthAccessToken, OAuthRefreshToken)
+pollForOAuthTokens nwConfig codeResponse = if (codeResponse ^. expiresIn) < 0 then
                                     error $ "OAuth token polling timed out " ++ (show codeResponse)
                                   else
                                     catch pollForOAuthTokens_ errorHandler 
@@ -379,8 +385,8 @@ pollForOAuthTokens codeResponse = if (codeResponse ^. expiresIn) < 0 then
             -- exception for non-200 responses.
             (W.defaults & checkStatus .~ (Just (\ _ _ _ -> Nothing))) 
             "https://www.googleapis.com/oauth2/v4/token"
-            ["client_id" := googleClientId,
-             "client_secret" := googleClientSecret,
+            ["client_id" := (nwConfig ^. googleClientId),
+             "client_secret" := (nwConfig ^. googleClientSecret),
              "code" := (codeResponse ^. deviceCode),
              "user_code" := (codeResponse ^. userCode),
              "verification_url" := (codeResponse ^. verificationUrl),
@@ -403,21 +409,23 @@ pollForOAuthTokens codeResponse = if (codeResponse ^. expiresIn) < 0 then
 
     retryPoll = do
       threadDelay $ 1000 * (codeResponse ^. interval)
-      pollForOAuthTokens (over expiresIn (\x -> x - (codeResponse ^. interval)) codeResponse)
+      pollForOAuthTokens nwConfig (over expiresIn (\x -> x - (codeResponse ^. interval)) codeResponse)
 
 
-startTelegramBot :: ConnectionPool -> Aria2Channel -> TelegramOutgoingChannel -> IO ()
-startTelegramBot pool aria2Chan tgOutChan = do
+startTelegramBot :: NwConfig -> IO ()
+startTelegramBot nwConfig = do
+  let pool = nwConfig ^. dbPool
   tgIncomingChan <- newChan
-  _ <- forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages pool tgIncomingChan)
-  _ <- forkIO $ forever $ logAllExceptions "Error in doPollLoop: " (doPollLoop tgIncomingChan =<< getLastUpdateId)
+  _ <- forkIO $ forever $ logAllExceptions "Error in processIncomingMEssages: " (processIncomingMessages nwConfig tgIncomingChan)
+  _ <- forkIO $ forever $ logAllExceptions "Error in doPollLoop: " (doPollLoop nwConfig tgIncomingChan =<< getLastUpdateId)
   _ <- forkIO $ A2.startWebsocketClient ariaRPCHost ariaRPCPort A2.defaultAria2Callbacks{
-    A2.onDownloadStart=(onAria2Notification pool),
-    A2.onDownloadPause=(onAria2Notification pool),
-    A2.onDownloadComplete=(onDownloadComplete pool),
-    A2.onDownloadStop=(onAria2Notification pool),
-    A2.onDownloadError=(onAria2Notification pool)
+    A2.onDownloadStart=(onAria2Notification nwConfig),
+    A2.onDownloadPause=(onAria2Notification nwConfig),
+    A2.onDownloadComplete=(onDownloadComplete nwConfig),
+    A2.onDownloadStop=(onAria2Notification nwConfig),
+    A2.onDownloadError=(onAria2Notification nwConfig)
     }
   return ()
 
-startAria2 = forkIO $ forever  ensureAria2Running
+startAria2 :: IO ()
+startAria2 = void $ forkIO $ forever ensureAria2Running

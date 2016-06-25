@@ -53,6 +53,13 @@ module Nightwatch.DBTypes(User(..)
   ,Log(..)
   ,LogId(..)
   ,joinStrings
+  ,googleClientId
+  ,googleClientSecret
+  ,tgramBotToken
+  ,dbPool
+  ,tgramOutgoingChannel
+  ,NwConfig
+  ,def 
   ) where
 import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Database.Persist
@@ -63,6 +70,10 @@ import           Nightwatch.Types
 import           Control.Concurrent.Chan (Chan)
 import qualified Nightwatch.TelegramTypes as TT
 import           Data.List(foldl', unfoldr, partition)
+import Control.Monad.Reader
+import qualified Data.Text as T
+import Data.Default
+import Control.Lens
 
 -- import Nightwatch.DBInternal
 
@@ -143,9 +154,22 @@ data AuthNightwatchCommand = AuthNightwatchCommand {
   logId :: LogId
 } deriving (Show, Eq)
 
+data NwConfig = NwConfig {
+  _googleClientId :: T.Text,
+  _googleClientSecret :: T.Text,
+  _tgramBotToken :: String,
+  _dbPool :: ConnectionPool,
+  _tgramOutgoingChannel :: TelegramOutgoingChannel
+  }
+$(makeLenses ''NwConfig)
+instance Default NwConfig where
+  def = NwConfig{}
+
 type Aria2ChannelMessage = AuthNightwatchCommand
 type Aria2Channel = Chan Aria2ChannelMessage
-type NwApp = SqlPersistT IO
+--type NwApp = ReaderT NwConfig (SqlPersistT IO)
+type NwApp  = SqlPersistT IO
+-- type NwAppWithConfig = ReaderT NwConfig NwApp
 
 createUser :: String -> OAuthAccessToken -> OAuthRefreshToken -> Maybe String -> Maybe TgramUserId -> Maybe TgramUsername -> Maybe TgramChatId -> NwApp (Entity User)
 createUser email accessToken refreshToken name tgramUserId tgramUsername tgramChatId = (liftIO getCurrentTime) >>= (\time -> insertEntity User{userName=name, userEmail=email, userTgramUserId=tgramUserId, userTgramUsername=tgramUsername, userTgramChatId=tgramChatId, userCreatedAt=time, userUpdatedAt=time, userAccessToken=accessToken, userRefreshToken=refreshToken})

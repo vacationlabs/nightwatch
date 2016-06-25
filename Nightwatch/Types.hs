@@ -28,8 +28,8 @@ module Nightwatch.Types (NightwatchCommand(..)
   ,Generic
   ,OAuthRefreshToken
   ,OAuthAccessToken
-  ,googleClientId
-  ,googleClientSecret
+--  ,googleClientId
+--  ,googleClientSecret
   ) where
 
 import qualified Data.Text           as T
@@ -52,11 +52,11 @@ import Data.Foldable(foldl')
 -- -- -- -- import Data.String(IsString)
 
 
-googleClientId :: T.Text
-googleClientId = "1045667944271-dnh31h9n4ul2i0q42tjirc7n7tk7k9jq.apps.googleusercontent.com"
+-- googleClientId :: T.Text
+-- googleClientId = "1045667944271-dnh31h9n4ul2i0q42tjirc7n7tk7k9jq.apps.googleusercontent.com"
 
-googleClientSecret :: T.Text
-googleClientSecret = "GcX5OviTB0uMjQHKpEXZaF4A"
+-- googleClientSecret :: T.Text
+-- googleClientSecret = "GcX5OviTB0uMjQHKpEXZaF4A"
 
 
 -- TODO -- VLUser should be changed to UserId coming from the database
