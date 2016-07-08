@@ -447,3 +447,4 @@ startTelegramBot nwConfig = do
 
 startAria2 :: NwConfig -> IO ()
 startAria2 nwConfig = void $ forkIO $ forever $ ensureAria2Running nwConfig
+
