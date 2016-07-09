@@ -30,6 +30,7 @@ module Nightwatch.TelegramTypes (
   ,OAuthTokenResponse
 )where
 
+import Prelude
 import Data.Aeson
 import Data.Aeson.Types
 import Data.Aeson.Casing

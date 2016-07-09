@@ -1,27 +1,17 @@
-import Prelude     (IO)
-import Application (appMain)
-
-main :: IO ()
-main = appMain
-
-
 -- {-# LANGUAGE OverloadedStrings          #-}
--- import Nightwatch.Types
--- import Nightwatch.DBTypes
--- import Nightwatch.Telegram
--- import Nightwatch.Webapp
--- -- import Nightwatch.Websocket
--- -- import Nightwatch.Aria2
--- -- import Control.Concurrent.Async
--- import Control.Concurrent.Chan
--- -- import Database.Persist.Sql
--- import Database.Persist.Sqlite
--- -- import Control.Monad.Trans.Resource (runResourceT)
--- import Control.Monad.Logger (runStderrLoggingT)
--- import Control.Monad.IO.Class  (liftIO)
--- import System.Environment(getEnv)
--- import Control.Lens
--- import qualified Data.Text as T
+import Prelude 
+import Application (startWebapp)
+import Nightwatch.Types
+import Nightwatch.DBTypes
+import Nightwatch.Telegram
+import Control.Monad.Logger (runStderrLoggingT)
+import Control.Monad.IO.Class  (liftIO)
+import System.Environment(getEnv)
+import Control.Lens
+import Control.Concurrent
+import qualified Data.Text as T
+import Foundation
+import Settings hiding (googleClientId, googleClientSecret, tgramBotToken, aria2Command, aria2DownloadDir)
 
 -- onMessage :: Aria2Gid -> IO ()
 -- onMessage gid = putStrLn $ "Received response " ++ (show gid)
@@ -39,8 +29,31 @@ main = appMain
 --         & tgramOutgoingChannel .~ tgOutChan
 --         & aria2Command .~ "/Users/saurabhnanda/projects/nightwatch/aria2-1.19.3/bin/aria2c"
 --         & aria2DownloadDir .~ "/Users/saurabhnanda/projects/nightwatch/downloads"
+--   startWebapp
 --   -- runMigrations pool
 --   startAria2 nwConfig
 --   startTelegramBot nwConfig
---   startWebapp nwConfig
 
+
+main :: IO ()
+main = do
+  putStrLn "Starting webapp..."
+  foundation <- startWebapp
+  putStrLn "creating channel..."
+  tgOutChan <- newChan
+  let nwConfig = (def :: NwConfig)
+        & googleClientId .~ (foundation ^. appSettingsL ^. googleClientIdL)
+        & googleClientSecret .~ (foundation ^. appSettingsL ^. googleClientSecretL)
+        & tgramBotToken .~ (foundation ^. appSettingsL ^. tgramBotTokenL)
+        & dbPool .~ (foundation ^. appConnPoolL)
+        & tgramOutgoingChannel .~ tgOutChan
+        & aria2Command .~ (foundation ^. appSettingsL ^. aria2CommandL)
+        & aria2DownloadDir .~ (foundation ^. appSettingsL ^. aria2DownloadDirL)
+  putStrLn "starting Aria2..."
+  startAria2 nwConfig
+  putStrLn "starting telegram bot..."
+  startTelegramBot nwConfig
+
+  
+  
+  

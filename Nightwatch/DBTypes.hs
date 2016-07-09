@@ -63,6 +63,8 @@ module Nightwatch.DBTypes(User(..)
   ,NwConfig
   ,def 
   ) where
+ 
+import Prelude
 import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Database.Persist
 import           Database.Persist.Sqlite

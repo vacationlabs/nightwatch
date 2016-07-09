@@ -10,6 +10,7 @@ import Yesod.Core.Types     (Logger)
 import qualified Yesod.Core.Unsafe as Unsafe
 import qualified Data.CaseInsensitive as CI
 import qualified Data.Text.Encoding as TE
+import Control.Lens (makeLensesFor)
 
 -- | The foundation datatype for your application. This can be a good place to
 -- keep settings and values requiring initialization before your application
@@ -22,6 +23,13 @@ data App = App
     , appHttpManager :: Manager
     , appLogger      :: Logger
     }
+$(makeLensesFor
+   [("appSettings", "appSettingsL")
+   , ("appStatic", "appStaticL")
+   , ("appConnPool", "appConnPoolL")
+   , ("appHttpManager", "appHttpManagerL")
+   , ("appLogger", "appLoggerL")]
+   ''App)
 
 -- This is where we define all of the routes in our application. For a full
 -- explanation of the syntax, please see:

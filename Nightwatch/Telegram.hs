@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
 module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..), AuthNightwatchCommand(..)) where
+import Prelude
 import           Control.Concurrent
 import qualified Control.Concurrent.Async as A
 -- import           Control.Concurrent.Chan
@@ -49,8 +50,13 @@ type Resp = Response TelegramResponse
 apiBaseUrl :: NwConfig -> String
 apiBaseUrl nwConfig = "https://api.telegram.org/bot" ++ (nwConfig ^. tgramBotToken)
 
+ariaRPCPort :: Int
 ariaRPCPort = 9999
+
+ariaRPCHost :: String
 ariaRPCHost = "localhost"
+
+ariaRPCUrl :: String
 ariaRPCUrl = printf "http://%s:%d/jsonrpc" ariaRPCHost ariaRPCPort
 -- aria2Command = 
 -- aria2DownloadDir = "./downloads"

@@ -1,7 +1,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Application
     ( getApplicationDev
-    , appMain
+    , startWebapp
     , develMain
     , makeFoundation
     , makeLogWare
@@ -35,6 +35,11 @@ import System.Log.FastLogger                (defaultBufSize, newStdoutLoggerSet,
 import Handler.Common
 import Handler.Home
 import Handler.Comment
+
+-- Custom imports (not from scaffold)
+import Nightwatch.DBTypes (NwConfig)
+import Control.Lens
+import System.Environment(getEnv)
 
 -- This line actually creates our YesodDispatch instance. It is the second half
 -- of the call to mkYesodData which occurs in Foundation.hs. Please see the
@@ -133,8 +138,8 @@ develMain :: IO ()
 develMain = develMainHelper getApplicationDev
 
 -- | The @main@ function for an executable running this site.
-appMain :: IO ()
-appMain = do
+startWebapp :: IO App
+startWebapp = do
     -- Get the settings from all relevant sources
     settings <- loadYamlSettingsArgs
         -- fall back to compile-time values, set to [] to require values at runtime
@@ -143,14 +148,20 @@ appMain = do
         -- allow environment variables to override
         useEnv
 
+    [cId, cSecret, botToken] <- sequence [getEnv "GOOGLE_CLIENT_ID", getEnv "GOOGLE_CLIENT_SECRET", getEnv "TELEGRAM_TOKEN"]
+
     -- Generate the foundation from the settings
-    foundation <- makeFoundation settings
+    foundation <- makeFoundation (settings
+                                   & googleClientIdL .~ (pack cId)
+                                   & googleClientSecretL .~ (pack cSecret)
+                                   & tgramBotTokenL .~ botToken)
 
     -- Generate a WAI Application from the foundation
     app <- makeApplication foundation
 
     -- Run the application with Warp
     runSettings (warpSettings foundation) app
+    return foundation
 
 
 --------------------------------------------------------------

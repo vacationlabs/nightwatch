@@ -18,6 +18,7 @@ import Network.Wai.Handler.Warp    (HostPreference)
 import Yesod.Default.Config2       (applyEnvValue, configSettingsYml)
 import Yesod.Default.Util          (WidgetFileSettings, widgetFileNoReload,
                                     widgetFileReload)
+import Control.Lens                (makeLensesFor) 
 
 -- | Runtime settings to configure this application. These settings can be
 -- loaded from various sources: defaults, environment variables, config files,
@@ -54,33 +55,45 @@ data AppSettings = AppSettings
     -- ^ Copyright text to appear in the footer of the page
     , appAnalytics              :: Maybe Text
     -- ^ Google Analytics code
+    , googleClientId            :: Text
+    , googleClientSecret        :: Text
+    , tgramBotToken             :: String
+    , aria2Command              :: String
+    , aria2DownloadDir          :: String
     }
 
+$(makeLensesFor
+   [("googleClientId", "googleClientIdL"),
+    ("googleClientSecret", "googleClientSecretL"),
+    ("tgramBotToken", "tgramBotTokenL"),
+    ("aria2Command", "aria2CommandL"),
+    ("aria2DownloadDir", "aria2DownloadDirL")]
+   ''AppSettings)
+
 instance FromJSON AppSettings where
-    parseJSON = withObject "AppSettings" $ \o -> do
-        let defaultDev =
+  parseJSON = withObject "AppSettings" $ \o -> do
+    let defaultDev = 
 #if DEVELOPMENT
-                True
+                      True
 #else
-                False
+                      False
 #endif
-        appStaticDir              <- o .: "static-dir"
-        appDatabaseConf           <- o .: "database"
-        appRoot                   <- o .:? "approot"
-        appHost                   <- fromString <$> o .: "host"
-        appPort                   <- o .: "port"
-        appIpFromHeader           <- o .: "ip-from-header"
-
-        appDetailedRequestLogging <- o .:? "detailed-logging" .!= defaultDev
-        appShouldLogAll           <- o .:? "should-log-all"   .!= defaultDev
-        appReloadTemplates        <- o .:? "reload-templates" .!= defaultDev
-        appMutableStatic          <- o .:? "mutable-static"   .!= defaultDev
-        appSkipCombining          <- o .:? "skip-combining"   .!= defaultDev
-
-        appCopyright              <- o .: "copyright"
-        appAnalytics              <- o .:? "analytics"
-
-        return AppSettings {..}
+    appStaticDir              <- o .: "static-dir"
+    appDatabaseConf           <- o .: "database"
+    appRoot                   <- o .:? "approot"
+    appHost                   <- fromString <$> o .: "host"
+    appPort                   <- o .: "port"
+    appIpFromHeader           <- o .: "ip-from-header"
+    appDetailedRequestLogging <- o .:? "detailed-logging" .!= defaultDev
+    appShouldLogAll           <- o .:? "should-log-all"   .!= defaultDev
+    appReloadTemplates        <- o .:? "reload-templates" .!= defaultDev
+    appMutableStatic          <- o .:? "mutable-static"   .!= defaultDev
+    appSkipCombining          <- o .:? "skip-combining"   .!= defaultDev
+    appCopyright              <- o .: "copyright"
+    appAnalytics              <- o .:? "analytics"
+    aria2Command              <- o .: "aria2Command"
+    aria2DownloadDir          <- o .: "aria2DownloadDir"
+    return AppSettings {..}
 
 -- | Settings for 'widgetFile', such as which template languages to support and
 -- default Hamlet settings.

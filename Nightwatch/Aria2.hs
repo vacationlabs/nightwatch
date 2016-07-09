@@ -15,6 +15,7 @@ module Nightwatch.Aria2(
   ,ariaRPCUrl
   ) where
 
+import Prelude
 import           Control.Exception
 import           Control.Monad.Catch
 import qualified Data.ByteString.Lazy as BL hiding (pack, unpack)

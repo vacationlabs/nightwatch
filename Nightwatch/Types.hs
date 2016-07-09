@@ -8,7 +8,7 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE DeriveGeneric              #-}
-
+ 
 module Nightwatch.Types (NightwatchCommand(..)
   ,TelegramOutgoingMessage(..)
   ,TelegramOutgoingChannel(..)
@@ -32,6 +32,7 @@ module Nightwatch.Types (NightwatchCommand(..)
 --  ,googleClientSecret
   ) where
 
+import Prelude 
 import qualified Data.Text           as T
 -- -- -- -- import qualified Data.Text.IO        as T
 import Control.Concurrent.Chan(Chan)
