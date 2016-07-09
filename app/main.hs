@@ -1,5 +1,6 @@
--- {-# LANGUAGE OverloadedStrings          #-}
-import Prelude 
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
+import Import hiding (googleClientId, googleClientSecret, tgramBotToken, aria2Command, aria2DownloadDir)
 import Application (startWebapp)
 import Nightwatch.Types
 import Nightwatch.DBTypes
@@ -8,10 +9,8 @@ import Control.Monad.Logger (runStderrLoggingT)
 import Control.Monad.IO.Class  (liftIO)
 import System.Environment(getEnv)
 import Control.Lens
-import Control.Concurrent
 import qualified Data.Text as T
-import Foundation
-import Settings hiding (googleClientId, googleClientSecret, tgramBotToken, aria2Command, aria2DownloadDir)
+import Application (makeFoundation)
 
 -- onMessage :: Aria2Gid -> IO ()
 -- onMessage gid = putStrLn $ "Received response " ++ (show gid)
@@ -37,8 +36,22 @@ import Settings hiding (googleClientId, googleClientSecret, tgramBotToken, aria2
 
 main :: IO ()
 main = do
-  putStrLn "Starting webapp..."
-  foundation <- startWebapp
+  -- Get the settings from all relevant sources
+  settings <- loadYamlSettingsArgs
+    -- fall back to compile-time values, set to [] to require values at runtime
+    [configSettingsYmlValue]
+
+    -- allow environment variables to override
+    useEnv
+
+  [cId, cSecret, botToken] <- sequence [getEnv "GOOGLE_CLIENT_ID", getEnv "GOOGLE_CLIENT_SECRET", getEnv "TELEGRAM_TOKEN"]
+
+  -- Generate the foundation from the settings
+  foundation <- makeFoundation (settings
+                                 & googleClientIdL .~ (pack cId)
+                                 & googleClientSecretL .~ (pack cSecret)
+                                 & tgramBotTokenL .~ botToken)
+
   putStrLn "creating channel..."
   tgOutChan <- newChan
   let nwConfig = (def :: NwConfig)
@@ -54,6 +67,5 @@ main = do
   putStrLn "starting telegram bot..."
   startTelegramBot nwConfig
 
-  
-  
-  
+  putStrLn "Starting webapp..."
+  startWebapp foundation

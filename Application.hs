@@ -40,6 +40,7 @@ import Handler.Comment
 import Nightwatch.DBTypes (NwConfig)
 import Control.Lens
 import System.Environment(getEnv)
+import Control.Concurrent(forkIO)
 
 -- This line actually creates our YesodDispatch instance. It is the second half
 -- of the call to mkYesodData which occurs in Foundation.hs. Please see the
@@ -138,30 +139,13 @@ develMain :: IO ()
 develMain = develMainHelper getApplicationDev
 
 -- | The @main@ function for an executable running this site.
-startWebapp :: IO App
-startWebapp = do
-    -- Get the settings from all relevant sources
-    settings <- loadYamlSettingsArgs
-        -- fall back to compile-time values, set to [] to require values at runtime
-        [configSettingsYmlValue]
-
-        -- allow environment variables to override
-        useEnv
-
-    [cId, cSecret, botToken] <- sequence [getEnv "GOOGLE_CLIENT_ID", getEnv "GOOGLE_CLIENT_SECRET", getEnv "TELEGRAM_TOKEN"]
-
-    -- Generate the foundation from the settings
-    foundation <- makeFoundation (settings
-                                   & googleClientIdL .~ (pack cId)
-                                   & googleClientSecretL .~ (pack cSecret)
-                                   & tgramBotTokenL .~ botToken)
-
+startWebapp :: App -> IO ()
+startWebapp foundation = do
     -- Generate a WAI Application from the foundation
     app <- makeApplication foundation
 
     -- Run the application with Warp
     runSettings (warpSettings foundation) app
-    return foundation
 
 
 --------------------------------------------------------------

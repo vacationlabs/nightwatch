@@ -23,7 +23,12 @@ library
                      Handler.Common
                      Handler.Home
                      Handler.Comment
-
+                     Nightwatch.Types
+                     Nightwatch.DBTypes
+                     Nightwatch.Aria2
+                     Nightwatch.Telegram
+                     Nightwatch.TelegramTypes
+                     
     if flag(dev) || flag(library-only)
         cpp-options:   -DDEVELOPMENT
         ghc-options:   -Wall -fwarn-tabs -O0
@@ -84,6 +89,24 @@ library
                  , time
                  , case-insensitive
                  , wai
+                 , async
+                 , lens
+                 , time
+                 , websockets
+                 , wreq
+                 , uuid
+                 , lens-aeson
+                 , safe
+                 , yesod-auth
+                 , data-default
+                 , transformers
+                 , mtl
+                 , aeson-casing
+                 , exceptions
+                 , monad-logger
+                 , process
+                 , regex-posix
+
 
 executable         Nightwatch
     if flag(library-only)
@@ -91,7 +114,26 @@ executable         Nightwatch
 
     main-is:           main.hs
     hs-source-dirs:    app
-    build-depends:     base, Nightwatch
+    build-depends: base
+                 , Nightwatch
+                 , async
+                 , lens
+                 , time
+                 , websockets
+                 , wreq
+                 , uuid
+                 , lens-aeson
+                 , safe
+                 , yesod-auth
+                 , data-default
+                 , transformers
+                 , mtl
+                 , aeson-casing
+                 , exceptions
+                 , monad-logger
+                 , process
+                 , regex-posix
+                 , text
 
     ghc-options:       -threaded -rtsopts -with-rtsopts=-N
 
