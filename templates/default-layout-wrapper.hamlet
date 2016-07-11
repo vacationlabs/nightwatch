@@ -44,29 +44,7 @@ $newline never
       document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/,'js');
   <body>
     <div class="container">
-      <header>
-        <nav .navbar .navbar-default>
-          <div .container-fluid>
-            <div .navbar-header>
-              <button type=button .navbar-toggle .collapsed data-toggle="collapse" data-target="#bs-example-navbar-collapse-1" aria-expanded="false">
-                <span sr-only>
-                  Toggle navigation
-                <span .icon-bar></span>
-                <span .icon-bar></span>
-                <span .icon-bar></span>
-              <a .navbar-brand href="#">
-                Brand
-            <p .navbar-right .navbar-text>
-              <span>
-                #{A2.glDownloadSpeed globalStat}
-                <i .glyphicon .glyphicon-arrow-down>
-              <span>
-                #{A2.glUploadSpeed globalStat}
-                <i .glyphicon .glyphicon-arrow-up>
-              <span .label .label-success>
-                On-the-watch
-      <div id="main" role="main">
-        ^{pageBody pc}
+      ^{pageBody pc}
       <footer>
         #{appCopyright $ appSettings master}
 

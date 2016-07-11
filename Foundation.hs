@@ -4,7 +4,7 @@ import Import.NoFoundation
 import Database.Persist.Sql (ConnectionPool, runSqlPool)
 import Text.Hamlet          (hamletFile)
 import Text.Jasmine         (minifym)
-import Yesod.Auth.OpenId    (authOpenId, IdentifierType (Claimed))
+import Yesod.Auth.GoogleEmail2 (authGoogleEmail)
 import Yesod.Default.Util   (addStaticContentExternal)
 import Yesod.Core.Types     (Logger)
 import qualified Yesod.Core.Unsafe as Unsafe
@@ -13,6 +13,8 @@ import qualified Data.Text.Encoding as TE
 import Control.Lens (makeLensesFor)
 import qualified Nightwatch.Aria2 as A2
 import qualified Nightwatch.Types as NWT
+-- import Yesod.Core (lookupSession)
+import Yesod.Auth (maybeAuth)
 
 -- | The foundation datatype for your application. This can be a good place to
 -- keep settings and values requiring initialization before your application
@@ -87,9 +89,8 @@ instance Yesod App where
         pc <- widgetToPageContent $ do
             addStylesheet $ StaticR css_bootstrap_css
             $(widgetFile "default-layout")
-
-        globalStat  <- liftIO $ A2.getGlobalStat NWT.ariaRPCUrl
         withUrlRenderer $(hamletFile "templates/default-layout-wrapper.hamlet") 
+
 
     -- The page to be redirected to when authentication is required.
     authRoute _ = Just $ AuthR LoginR
@@ -98,8 +99,13 @@ instance Yesod App where
     isAuthorized (AuthR _) _ = return Authorized
     isAuthorized FaviconR _ = return Authorized
     isAuthorized RobotsR _ = return Authorized
-    -- Default to Authorized for now.
-    isAuthorized _ _ = return Authorized
+
+    -- TODO: Check for @vacationlabs.com email ID
+    isAuthorized _ _ = do
+      mAuthId <- maybeAuthId
+      case mAuthId of
+        (Just _) -> return Authorized
+        Nothing -> return AuthenticationRequired
 
     -- This function creates static content files in the static folder
     -- and names them based on a hash of their content. This allows
@@ -139,7 +145,7 @@ instance YesodPersistRunner App where
     getDBRunner = defaultGetDBRunner appConnPool
 
 instance YesodAuth App where
-    type AuthId App = UserId
+    type AuthId App = Text
 
     -- Where to send a user after successful login
     loginDest _ = HomeR
@@ -151,18 +157,24 @@ instance YesodAuth App where
     authenticate creds = runDB $ do
         x <- getBy $ UniqueUser $ credsIdent creds
         case x of
-            Just (Entity uid _) -> return $ Authenticated uid
-            Nothing -> Authenticated <$> insert User
-                { userIdent = credsIdent creds
-                , userPassword = Nothing
-                }
+            Just (Entity _ userE) -> return $ Authenticated (userIdent userE)
+            Nothing -> do
+              _ <- insert User{ userIdent = credsIdent creds, userPassword = Nothing}
+              return $ Authenticated (credsIdent creds)
 
     -- You can add other plugins like Google Email, email or OAuth here
-    authPlugins _ = [authOpenId Claimed []]
+    authPlugins foundation = [authGoogleEmail (googleClientId s) (googleClientSecret s)]
+      where s = appSettings foundation
+
+    -- maybeAuthId = lookupSession "_ID"
 
     authHttpManager = getHttpManager
 
-instance YesodAuthPersist App
+instance YesodAuthPersist App where
+  type AuthEntity App = User
+  getAuthEntity userIdent_ = runDB $ do
+    u <- selectFirst [ UserIdent ==. userIdent_ ] []
+    return $ fmap entityVal u
 
 -- This instance is required to use forms. You can modify renderMessage to
 -- achieve customized and internationalized form validation messages.
@@ -190,5 +202,10 @@ unsafeHandler = Unsafe.fakeHandlerGetLogger appLogger
 
 nav :: Widget
 nav = do
+  maybeUserE <- handlerToWidget $ do
+    maybeUserIdent <- maybeAuthId
+    case maybeUserIdent of
+      Just userIdent -> runDB $ selectFirst [UserIdent ==. userIdent] []
+      Nothing -> return Nothing
   globalStat  <- liftIO $ A2.getGlobalStat NWT.ariaRPCUrl
-  $(whamletFile "templates/navbar.hamlet")  
+  $(whamletFile "templates/navbar.hamlet")
