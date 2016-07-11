@@ -28,12 +28,16 @@ module Nightwatch.Types (NightwatchCommand(..)
   ,Generic
   ,OAuthRefreshToken
   ,OAuthAccessToken
+  ,ariaRPCPort
+  ,ariaRPCHost
+  ,ariaRPCUrl
 --  ,googleClientId
 --  ,googleClientSecret
   ) where
 
 import Prelude 
 import qualified Data.Text           as T
+import Text.Printf
 -- -- -- -- import qualified Data.Text.IO        as T
 import Control.Concurrent.Chan(Chan)
 import Data.Aeson
@@ -153,3 +157,11 @@ nextRequestId = UUIDv1.nextUUID >>= \uuid ->
 joinStrings :: String -> [String] -> String
 joinStrings sep lst = drop (length sep) $ foldl' (\memo x -> memo ++ sep ++ x) "" lst
 
+ariaRPCPort :: Int
+ariaRPCPort = 9999
+
+ariaRPCHost :: String
+ariaRPCHost = "localhost"
+
+ariaRPCUrl :: String
+ariaRPCUrl = printf "http://%s:%d/jsonrpc" ariaRPCHost ariaRPCPort

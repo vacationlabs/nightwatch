@@ -33,3 +33,6 @@ copyright: Insert copyright statement here
 
 aria2Command: "_env:ARIA2_COMMAND:/Users/saurabhnanda/projects/nightwatch/aria2-1.19.3/bin/aria2c"
 aria2DownloadDir: "_env:ARIA2_DOWNLOAD_DIR:/Users/saurabhnanda/projects/nightwatch/downloads"
+googleClientId: "_env:GOOGLE_CLIENT_ID:"
+googleClientSecret: "_env:GOOGLE_CLIENT_SECRET:"
+tgramBotToken: "_env:TELEGRAM_TOKEN:"

@@ -5,6 +5,7 @@
 
 <section.list-group>
   <span .list-group-item>
+    Let's see if this work
     Now that you have a working project you should use the
     <a href=http://www.yesodweb.com/book/>
       Yesod book <span class="glyphicon glyphicon-book"></span>

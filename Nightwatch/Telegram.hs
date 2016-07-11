@@ -50,14 +50,6 @@ type Resp = Response TelegramResponse
 apiBaseUrl :: NwConfig -> String
 apiBaseUrl nwConfig = "https://api.telegram.org/bot" ++ (nwConfig ^. tgramBotToken)
 
-ariaRPCPort :: Int
-ariaRPCPort = 9999
-
-ariaRPCHost :: String
-ariaRPCHost = "localhost"
-
-ariaRPCUrl :: String
-ariaRPCUrl = printf "http://%s:%d/jsonrpc" ariaRPCHost ariaRPCPort
 -- aria2Command = 
 -- aria2DownloadDir = "./downloads"
 -- aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]

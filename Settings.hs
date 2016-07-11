@@ -93,6 +93,9 @@ instance FromJSON AppSettings where
     appAnalytics              <- o .:? "analytics"
     aria2Command              <- o .: "aria2Command"
     aria2DownloadDir          <- o .: "aria2DownloadDir"
+    googleClientId            <- o .: "googleClientId"
+    googleClientSecret        <- o .: "googleClientSecret"
+    tgramBotToken             <- o .: "tgramBotToken"
     return AppSettings {..}
 
 -- | Settings for 'widgetFile', such as which template languages to support and

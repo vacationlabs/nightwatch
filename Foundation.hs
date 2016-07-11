@@ -11,6 +11,8 @@ import qualified Yesod.Core.Unsafe as Unsafe
 import qualified Data.CaseInsensitive as CI
 import qualified Data.Text.Encoding as TE
 import Control.Lens (makeLensesFor)
+import qualified Nightwatch.Aria2 as A2
+import qualified Nightwatch.Types as NWT
 
 -- | The foundation datatype for your application. This can be a good place to
 -- keep settings and values requiring initialization before your application
@@ -85,7 +87,9 @@ instance Yesod App where
         pc <- widgetToPageContent $ do
             addStylesheet $ StaticR css_bootstrap_css
             $(widgetFile "default-layout")
-        withUrlRenderer $(hamletFile "templates/default-layout-wrapper.hamlet")
+
+        globalStat  <- liftIO $ A2.getGlobalStat NWT.ariaRPCUrl
+        withUrlRenderer $(hamletFile "templates/default-layout-wrapper.hamlet") 
 
     -- The page to be redirected to when authentication is required.
     authRoute _ = Just $ AuthR LoginR
@@ -174,6 +178,7 @@ instance HasHttpManager App where
 unsafeHandler :: App -> Handler a -> IO a
 unsafeHandler = Unsafe.fakeHandlerGetLogger appLogger
 
+
 -- Note: Some functionality previously present in the scaffolding has been
 -- moved to documentation in the Wiki. Following are some hopefully helpful
 -- links:
@@ -181,3 +186,9 @@ unsafeHandler = Unsafe.fakeHandlerGetLogger appLogger
 -- https://github.com/yesodweb/yesod/wiki/Sending-email
 -- https://github.com/yesodweb/yesod/wiki/Serve-static-files-from-a-separate-domain
 -- https://github.com/yesodweb/yesod/wiki/i18n-messages-in-the-scaffolding
+
+
+nav :: Widget
+nav = do
+  globalStat  <- liftIO $ A2.getGlobalStat NWT.ariaRPCUrl
+  $(whamletFile "templates/navbar.hamlet")  

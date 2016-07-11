@@ -44,13 +44,13 @@ main = do
     -- allow environment variables to override
     useEnv
 
-  [cId, cSecret, botToken] <- sequence [getEnv "GOOGLE_CLIENT_ID", getEnv "GOOGLE_CLIENT_SECRET", getEnv "TELEGRAM_TOKEN"]
+--  [cId, cSecret, botToken] <- sequence [getEnv "GOOGLE_CLIENT_ID", getEnv "GOOGLE_CLIENT_SECRET", getEnv "TELEGRAM_TOKEN"]
 
   -- Generate the foundation from the settings
-  foundation <- makeFoundation (settings
-                                 & googleClientIdL .~ (pack cId)
-                                 & googleClientSecretL .~ (pack cSecret)
-                                 & tgramBotTokenL .~ botToken)
+  foundation <- makeFoundation settings
+                                 -- & googleClientIdL .~ (pack cId)
+                                 -- & googleClientSecretL .~ (pack cSecret)
+                                 -- & tgramBotTokenL .~ botToken)
 
   putStrLn "creating channel..."
   tgOutChan <- newChan

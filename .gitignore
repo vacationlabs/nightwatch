@@ -22,3 +22,4 @@ aria2-1.19.3/
 *.dyn_hi
 *.dyn_o
 *.p_o
+*.dump-splices

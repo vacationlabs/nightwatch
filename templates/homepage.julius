@@ -13,7 +13,6 @@ $(function() {
 
     // Make an AJAX request to the server to create a new comment
     $.ajax({
-      url: '@{CommentR}',
       type: 'POST',
       contentType: "application/json",
       data: JSON.stringify({

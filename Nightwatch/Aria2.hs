@@ -1,5 +1,16 @@
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE EmptyDataDecls             #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE QuasiQuotes                #-}
+{-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE DeriveGeneric              #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 module Nightwatch.Aria2(
   Aria2RpcEndpoint
   ,JsonRpcException(..)
@@ -12,7 +23,8 @@ module Nightwatch.Aria2(
   ,tellStatus
   ,pause
   ,startWebsocketClient
-  ,ariaRPCUrl
+  ,GlobalStatResponse(..)
+  ,getGlobalStat
   ) where
 
 import Prelude
@@ -28,8 +40,6 @@ import           Nightwatch.DBTypes
 import           Nightwatch.Types hiding (nextRequestId)
 import           Safe (fromJustNote)
 import           Data.Typeable
--- import           Control.Monad.Catch
--- import           Control.Exception
 import           Data.Aeson
 import           Data.Aeson.Types
 import qualified Control.Lens as L
@@ -42,9 +52,10 @@ import           Control.Monad (forever)
 import           Data.Functor (void)
 -- import qualified Data.Map.Strict as M
 import qualified Data.Text as T
+import Data.Aeson.Casing
 
-ariaRPCPort = 9999
-ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/jsonrpc"
+-- ariaRPCPort = 9999
+-- ariaRPCUrl = "http://localhost:" ++ (show ariaRPCPort) ++ "/jsonrpc"
 
 type Aria2RpcEndpoint = String
 
@@ -147,7 +158,7 @@ instance FromJSON GetFilesResponse where
     v .: "path" <*>
     fmap read (v .: "length") <*>
     fmap read (v .: "completedLength") <*>
-    fmap parseBoolean (v .: "selected") <*>
+    fmap parseBoolean (v .: "selected") <*> 
     v .: "uris"
 
 data StatusResponse = StatusResponse {
@@ -198,6 +209,22 @@ instance FromJSON StatusResponse where
     v .: "files" <*>
     v .:? "bittorrent"
 
+data GlobalStatResponse = GlobalStatResponse {
+  glDownloadSpeed :: Integer,
+  glUploadSpeed :: Integer,
+  glNumActive :: Int,
+  glNumWaiting :: Int
+  } deriving (Show, Generic)
+
+-- $(L.makeLensesWith L.abbreviatedFields ''GlobalStatResponse) 
+
+instance FromJSON GlobalStatResponse where
+  parseJSON (Object v) = GlobalStatResponse <$>
+    fmap read (v .: "downloadSpeed") <*>
+    fmap read (v .: "uploadSpeed") <*>
+    fmap read (v .: "numActive") <*>
+    fmap read (v .: "numWaiting")
+
 parseBoolean :: String -> Bool
 parseBoolean "true" = True
 parseBoolean "false" = False
@@ -231,7 +258,7 @@ prepareJsonRpcRequest method params = do
 encodeJsonRpcRequest :: (ToJSON params) => String -> params -> IO (BL.ByteString)
 encodeJsonRpcRequest method params = fmap encode  (prepareJsonRpcRequest method params)
 
-makeJsonRpcAndExtractResult :: (FromJSON res, ToJSON params) => Aria2RpcEndpoint -> String -> params -> IO (res)
+makeJsonRpcAndExtractResult :: (FromJSON res, ToJSON params, Show res) => Aria2RpcEndpoint -> String -> params -> IO (res)
 makeJsonRpcAndExtractResult rpcEndpoint method params = do
   req <- prepareJsonRpcRequest method params
   res <- W.post rpcEndpoint (toJSON req)
@@ -245,6 +272,9 @@ addUri rpcEndpoint url = makeJsonRpcAndExtractResult rpcEndpoint "aria2.addUri" 
 
 tellStatus :: Aria2RpcEndpoint -> Aria2Gid -> IO (StatusResponse)
 tellStatus rpcEndpoint gid = makeJsonRpcAndExtractResult rpcEndpoint "aria2.tellStatus" [gid]
+
+getGlobalStat :: Aria2RpcEndpoint -> IO (GlobalStatResponse)
+getGlobalStat rpcEndpoint = makeJsonRpcAndExtractResult rpcEndpoint "aria2.getGlobalStat" ()
 
 pause :: Aria2RpcEndpoint -> Aria2Gid -> IO (Aria2Gid)
 pause rpcEndpoint gid = makeJsonRpcAndExtractResult rpcEndpoint "aria2.pause" [gid]
