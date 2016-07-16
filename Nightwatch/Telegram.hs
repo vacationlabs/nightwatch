@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
-module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..), AuthNightwatchCommand(..)) where
+module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..)) where
 import Prelude
 import           Control.Concurrent
 import qualified Control.Concurrent.Async as A
@@ -28,9 +28,10 @@ import           Network.Wreq hiding (defaults)
 import qualified Network.Wreq as W(defaults)
 -- import Network.HTTP.Conduit(HttpException)
 -- import           Network.XmlRpc.Client
-import qualified Nightwatch.DBTypes as DB (message, chatId, User(..), authenticateChat)
-import           Nightwatch.DBTypes hiding (message, chatId, User(..))
-import           Nightwatch.TelegramTypes
+import qualified Nightwatch.DBTypes as DB (message, User(..), authenticateChat, userEmail)
+import           Nightwatch.DBTypes hiding (message, User(..))
+import           Nightwatch.TelegramTypes hiding (accessToken, refreshToken, User(..))
+import           Nightwatch.TelegramTypes as TT
 -- import qualified Nightwatch.Types as Ty(message)
 import           Nightwatch.Types hiding (message)
 -- import           System.IO.Error
@@ -42,8 +43,9 @@ import           Safe (fromJustNote)
 import           Text.Printf
 import           Data.Char (toUpper)
 import           Database.Persist.Sql (transactionSave)
+import           Database.Persist (Key)
 import           Data.List (foldl')
-
+import Model as DB
 type Resp = Response TelegramResponse
 
 -- botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -54,11 +56,11 @@ apiBaseUrl nwConfig = "https://api.telegram.org/bot" ++ (nwConfig ^. tgramBotTok
 -- aria2DownloadDir = "./downloads"
 -- aria2Args = ["--enable-rpc=true", "--rpc-listen-port=" ++ (show ariaRPCPort), "--rpc-listen-all=false", "--dir=" ++ aria2DownloadDir]
 
-
+  
 parseIncomingMessage :: Maybe TgramMsgText -> NightwatchCommand
 parseIncomingMessage Nothing = InvalidCommand
 parseIncomingMessage (Just (TgramMsgText inp))
-  | length matches == 0 = InvalidCommand
+  | (length matches) == 0 = InvalidCommand
   | (head matches) == "download" = DownloadCommand $ URL (head $ tail matches)
   | (head matches) == "pause" = PauseCommand $ Aria2Gid (head $ tail matches)
   | (head matches) == "unpause" = PauseCommand $ Aria2Gid (head $ tail matches)
@@ -140,7 +142,14 @@ oAuthProcess nwConfig chatId tgramUserId tgramUsername = do
   (accessToken, refreshToken, e, d, n) <- liftIO oAuthProcess_
   case (e, d) of
     (Just email, Just "vacationlabs.com") -> do
-      createUser email accessToken refreshToken n (Just tgramUserId) tgramUsername (Just chatId)
+      -- _ <- createUser n e (Just tgramUserId) tgramUsername (Just chatId) accessToken refreshToken
+      createOrUpdateUser DB.User{DB.userName=n
+                                ,DB.userEmail=email
+                                ,DB.userTgramUserId=Just tgramUserId
+                                ,DB.userTgramUsername=tgramUsername
+                                ,DB.userTgramChatId=Just chatId
+                                ,DB.userAccessToken=accessToken
+                                ,DB.userRefreshToken=refreshToken}
       liftIO $ sendMsg_ $ "Welcome " ++ email
     (Just email, _) -> liftIO $ sendMsg_ "Sorry, can't let you in. Doesn't look like you authenticated yourself with a VL email ID."
     (Nothing, _) -> liftIO $ sendMsg_ "Whoops! Something's gone wrong. I didn't get access to your email ID after authentication."
@@ -411,7 +420,7 @@ pollForOAuthTokens nwConfig codeResponse = if (codeResponse ^. expiresIn) < 0 th
         200 -> do
           j <- asJSON r
           let pollResponse = (j ^. responseBody) :: OAuthTokenResponse
-          return (pollResponse ^. accessToken, pollResponse ^. refreshToken)
+          return (pollResponse ^. TT.accessToken, pollResponse ^. TT.refreshToken)
   
         _ -> do
           j <- asJSON r :: IO (Response Value)

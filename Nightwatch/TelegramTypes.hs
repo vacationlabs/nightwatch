@@ -12,23 +12,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
 
-module Nightwatch.TelegramTypes (
-  User(..)
-  ,Chat(..)
-  ,Message(..)
-  ,Update(..)
-  ,TelegramResponse(..)
-  ,OAuthCodeResponse
-  ,deviceCode
-  ,userCode
-  ,verificationUrl
-  ,expiresIn
-  ,interval
-  ,accessToken
-  ,refreshToken
-  ,tokenType
-  ,OAuthTokenResponse
-)where
+module Nightwatch.TelegramTypes where
 
 import Prelude
 import Data.Aeson

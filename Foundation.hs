@@ -15,6 +15,10 @@ import qualified Nightwatch.Aria2 as A2
 import qualified Nightwatch.Types as NWT
 -- import Yesod.Core (lookupSession)
 import Yesod.Auth (maybeAuth)
+import Yesod.Auth.Message
+import Data.Text(splitOn)
+import Nightwatch.DBTypes as DB hiding (googleClientId, googleClientSecret)
+import qualified Data.List as DL
 
 -- | The foundation datatype for your application. This can be a good place to
 -- keep settings and values requiring initialization before your application
@@ -145,7 +149,7 @@ instance YesodPersistRunner App where
     getDBRunner = defaultGetDBRunner appConnPool
 
 instance YesodAuth App where
-    type AuthId App = Text
+    type AuthId App = String
 
     -- Where to send a user after successful login
     loginDest _ = HomeR
@@ -154,13 +158,22 @@ instance YesodAuth App where
     -- Override the above two destinations when a Referer: header is present
     redirectToReferer _ = True
 
-    authenticate creds = runDB $ do
-        x <- getBy $ UniqueUser $ credsIdent creds
-        case x of
-            Just (Entity _ userE) -> return $ Authenticated (userIdent userE)
-            Nothing -> do
-              _ <- insert User{ userIdent = credsIdent creds, userPassword = Nothing}
-              return $ Authenticated (credsIdent creds)
+    authenticate creds =  runDB $ do
+      let e = credsIdent creds
+      x <- selectFirst [UserEmail ==. (unpack e)] [] 
+      case x of
+        Just (Entity _ userE) -> return $ Authenticated (userEmail userE)
+        Nothing -> case (DL.last $ splitOn "@" e) of
+          "vacationlabs.com" -> do
+            _ <- DB.createOrUpdateUser User{userName=Nothing
+                                           ,userEmail=unpack e
+                                           ,userTgramUserId=Nothing
+                                           ,userTgramUsername=Nothing
+                                           ,userTgramChatId=Nothing
+                                           ,userAccessToken="TODO"
+                                           ,userRefreshToken="TODO"}
+            return $ Authenticated (unpack e)
+          _ -> return $ UserError Yesod.Auth.Message.Email
 
     -- You can add other plugins like Google Email, email or OAuth here
     authPlugins foundation = [authGoogleEmail (googleClientId s) (googleClientSecret s)]
@@ -172,9 +185,10 @@ instance YesodAuth App where
 
 instance YesodAuthPersist App where
   type AuthEntity App = User
-  getAuthEntity userIdent_ = runDB $ do
-    u <- selectFirst [ UserIdent ==. userIdent_ ] []
+  getAuthEntity email = runDB $ do
+    u <- selectFirst [ UserEmail ==. email ] []
     return $ fmap entityVal u
+
 
 -- This instance is required to use forms. You can modify renderMessage to
 -- achieve customized and internationalized form validation messages.
@@ -203,9 +217,9 @@ unsafeHandler = Unsafe.fakeHandlerGetLogger appLogger
 nav :: Widget
 nav = do
   maybeUserE <- handlerToWidget $ do
-    maybeUserIdent <- maybeAuthId
-    case maybeUserIdent of
-      Just userIdent -> runDB $ selectFirst [UserIdent ==. userIdent] []
-      Nothing -> return Nothing
+    maybeUserEmail <- maybeAuthId
+    case maybeUserEmail of
+      Just userEmail -> runDB $ selectFirst [UserEmail ==. userEmail] []
+      Nothing -> return Nothing 
   globalStat  <- liftIO $ A2.getGlobalStat NWT.ariaRPCUrl
   $(whamletFile "templates/navbar.hamlet")

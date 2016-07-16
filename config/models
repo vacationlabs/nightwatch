@@ -1,17 +1,47 @@
 User
-    ident Text
-    password Text Maybe
-    UniqueUser ident
-    deriving Typeable
-Email
-    email Text
-    userId UserId Maybe
-    verkey Text Maybe
-    UniqueEmail email
-Comment json -- Adding "json" causes ToJSON and FromJSON instances to be derived.
-    message Text
-    userId UserId Maybe
-    deriving Eq
-    deriving Show
+  name String Maybe
+  email String
+  tgramUserId TgramUserId Maybe
+  tgramUsername TgramUsername Maybe
+  tgramChatId TgramChatId Maybe -- The last known ChatId from this user
+  accessToken OAuthAccessToken
+  refreshToken OAuthRefreshToken
+  ~createdAt UTCTime
+  ~updatedAt UTCTime
+  deriving Show
 
+Log
+  requestId Aria2RequestId Maybe
+  userId UserId Maybe
+  tgramUserId TgramUserId Maybe
+  tgramChatId TgramChatId Maybe
+  tgramIncomingText TgramMsgText Maybe
+  tgramOutgoingText TgramMsgText Maybe
+  nwCmd NightwatchCommand Maybe
+  aria2Request String Maybe
+  aria2Response String Maybe
+  ~createdAt UTCTime
+  ~updatedAt UTCTime
+  deriving Show
+
+Download
+  userId UserId
+  gid Aria2Gid
+  logId LogId
+  parentId DownloadId Maybe
+  ~createdAt UTCTime
+  ~updatedAt UTCTime
+  deriving Show
+
+File
+  downloadId DownloadId
+  fpath String
+  len Int
+  deriving Show
+
+Url
+  downloadId DownloadId
+  fileId FileId
+  url URL
+  deriving Show
  -- By default this file is used in Model.hs (which is imported by Foundation.hs)

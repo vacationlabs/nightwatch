@@ -7,15 +7,12 @@
 {-# LANGUAGE QuasiQuotes                #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE RecordWildCards            #-}
 
 module Nightwatch.DBTypes(User(..)
-  ,Download(..)
-  ,AuthNightwatchCommand(..)
-  ,Aria2Channel(..)
-  ,Aria2ChannelMessage(..)
   ,NightwatchCommand(..)
   ,TelegramOutgoingMessage(..)
-  ,TelegramOutgoingChannel(..)
+  ,TelegramOutgoingChannel
   ,Aria2Gid(..)
   ,URL(..)
   ,TgramUsername(..)
@@ -24,14 +21,12 @@ module Nightwatch.DBTypes(User(..)
   ,TgramUserId(..)
   ,TgramMsgText(..)
   ,TgramChatId(..)
-  ,UserId(..)
-  ,Key(..)
-  ,DownloadId(..)
   ,ConnectionPool
   ,File(..)
   ,Url(..)
-  ,createUser
   ,createDownload
+  ,createUser
+  ,createOrUpdateUser
   ,fetchDownloadByGid
   ,authenticateChat
   ,fetchUserByTelegramUserId
@@ -46,12 +41,10 @@ module Nightwatch.DBTypes(User(..)
   ,updateDownloadWithFiles
   ,getDownloadsByUserId
   ,SqlPersistM
-  ,NwApp(..)
+  ,NwApp
   ,Entity(..)
   ,runDb
   ,runMigrations
-  ,Log(..)
-  ,LogId(..)
   ,joinStrings
   ,googleClientId
   ,googleClientSecret
@@ -61,29 +54,28 @@ module Nightwatch.DBTypes(User(..)
   ,aria2Command
   ,aria2DownloadDir
   ,NwConfig
-  ,def 
+  ,def
+  ,module Model
   ) where
  
 import Prelude
-import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Database.Persist
 import           Database.Persist.Sqlite
-import           Database.Persist.TH
-import           Data.Time (UTCTime, getCurrentTime)
+import           Data.Time (getCurrentTime)
 import           Nightwatch.Types
-import           Control.Concurrent.Chan (Chan)
 import qualified Nightwatch.TelegramTypes as TT
-import           Data.List(foldl', unfoldr, partition)
+import           Data.List(unfoldr, partition)
 import Control.Monad.Reader
 import qualified Data.Text as T
 import Data.Default
 import Control.Lens
-
+import Model
 
 -- import Nightwatch.DBInternal
 
 -- NOTE: This cannot be implemented because the accessors are not createdAt
 -- for all the Entity classes. They are userCreatedAt, downloadCreatedAt, etc.
+
 
 -- class (MonadIO m) => Timestamped a where
 --   assignCreatedAt :: a -> m a
@@ -95,56 +87,6 @@ import Control.Lens
 --   assignTimestamps :: a -> m a
 --   assignTimestamps x = getCurrentTime >>= (\time -> x{createdAt=time, updatedAt=time})
 
-share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
-User
-  name String Maybe
-  email String
-  tgramUserId TgramUserId Maybe
-  tgramUsername TgramUsername Maybe
-  tgramChatId TgramChatId Maybe -- The last known ChatId from this user
-  accessToken OAuthAccessToken
-  refreshToken OAuthRefreshToken
-  createdAt UTCTime
-  updatedAt UTCTime
-  deriving Show
-
-Log
-  requestId Aria2RequestId Maybe
-  userId UserId Maybe
-  tgramUserId TgramUserId Maybe
-  tgramChatId TgramChatId Maybe
-  tgramIncomingText TgramMsgText Maybe
-  tgramOutgoingText TgramMsgText Maybe
-  nwCmd NightwatchCommand Maybe
-  aria2Request String Maybe
-  aria2Response String Maybe
-  createdAt UTCTime
-  updatedAt UTCTime
-  deriving Show
-
-Download
-  userId UserId
-  gid Aria2Gid
-  logId LogId
-  parentId DownloadId Maybe
-  createdAt UTCTime
-  updatedAt UTCTime
-  deriving Show
-
-File
-  downloadId DownloadId
-  path String
-  length Int
-  deriving Show
-
-Url
-  downloadId DownloadId
-  fileId FileId
-  url URL
-  deriving Show
-|]
-
-
 type ParentDownloadId = DownloadId
 
 -- NOTE: see note above.
@@ -152,12 +94,12 @@ type ParentDownloadId = DownloadId
 -- instance Timestamped Aria2Log
 -- instance Timestamped Download
 
-data AuthNightwatchCommand = AuthNightwatchCommand {
-  command :: NightwatchCommand,
-  userId :: UserId,
-  chatId :: TgramChatId,
-  logId :: LogId
-} deriving (Show, Eq)
+-- data AuthNightwatchCommand = AuthNightwatchCommand {
+--   command :: NightwatchCommand,
+--   userId :: UserId,
+--   chatId :: TgramChatId,
+--   logId :: LogId
+-- } deriving (Show, Eq)
 
 data NwConfig = NwConfig {
   _googleClientId :: T.Text,
@@ -172,22 +114,32 @@ $(makeLenses ''NwConfig)
 instance Default NwConfig where
   def = NwConfig{}
 
-type Aria2ChannelMessage = AuthNightwatchCommand
-type Aria2Channel = Chan Aria2ChannelMessage
---type NwApp = ReaderT NwConfig (SqlPersistT IO)
 type NwApp  = SqlPersistT IO
+--type NwApp = ReaderT NwConfig (SqlPersistT IO)
 -- type NwAppWithConfig = ReaderT NwConfig NwApp
 
-createUser :: String -> OAuthAccessToken -> OAuthRefreshToken -> Maybe String -> Maybe TgramUserId -> Maybe TgramUsername -> Maybe TgramChatId -> NwApp (Entity User)
-createUser email accessToken refreshToken name tgramUserId tgramUsername tgramChatId = (liftIO getCurrentTime) >>= (\time -> insertEntity User{userName=name, userEmail=email, userTgramUserId=tgramUserId, userTgramUsername=tgramUsername, userTgramChatId=tgramChatId, userCreatedAt=time, userUpdatedAt=time, userAccessToken=accessToken, userRefreshToken=refreshToken})
+createOrUpdateUser :: (MonadIO m) => User -> SqlPersistT m (Entity User)
+createOrUpdateUser userE = do
+  let e = userEmail userE
+  u <- selectFirst [UserEmail ==. e] []
+  case u of
+    Just (Entity existingUid _) -> do
+      userWithTimeE <- updateTs userE
+      replace existingUid userWithTimeE
+      return (Entity existingUid userWithTimeE)
+    Nothing -> insertEntity =<< (assignTs userE)
+
+
+createUser :: Maybe String -> String -> Maybe TgramUserId -> Maybe TgramUsername -> Maybe TgramChatId -> OAuthAccessToken -> OAuthRefreshToken -> NwApp (Entity User)
+createUser userName userEmail userTgramUserId userTgramUsername userTgramChatId userAccessToken userRefreshToken =
+  insertEntity =<< assignTs User{..}
 
 -- createAria2RequestLog :: Maybe String -> Maybe UserId -> NwApp ()
 -- createAria2RequestLog request userId = (liftIO getCurrentTime) >>= (\time -> update logId [ LogAria2Request =. request, LogUserId =. userId ])
 
 createDownload :: Aria2Gid -> LogId -> UserId -> [(String, Integer, [URL])] -> Maybe ParentDownloadId -> NwApp (Entity Download)
 createDownload gid logId_ userId_ files parentId = do
-  time <- liftIO getCurrentTime
-  dloadE <- insertEntity Download{downloadGid=gid, downloadLogId=logId_, downloadUserId=userId_, downloadParentId=parentId, downloadCreatedAt=time, downloadUpdatedAt=time}
+  dloadE <- insertEntity =<< (assignTs Download{downloadGid=gid, downloadLogId=logId_, downloadUserId=userId_, downloadParentId=parentId})
   _ <- updateDownloadWithFiles (entityKey dloadE) files
   return dloadE
 
@@ -196,7 +148,7 @@ updateDownloadWithFiles dloadId files = (sequence . (map $ insertFile dloadId)) 
   where
     insertFile :: DownloadId -> (String, Integer, [URL]) -> NwApp (Entity File)
     insertFile dloadId (p, l, urls) = do
-      fileE <- insertEntity File{filePath=p, fileLength=(fromIntegral l), fileDownloadId=dloadId}
+      fileE <- insertEntity File{fileFpath=p, fileLen=(fromIntegral l), fileDownloadId=dloadId}
       _ <- (sequence . (map (\u -> insertEntity Url{urlUrl=u, urlDownloadId=dloadId, urlFileId=(entityKey fileE)}))) urls
       return fileE
 
