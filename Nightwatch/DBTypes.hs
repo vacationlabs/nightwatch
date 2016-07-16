@@ -26,7 +26,7 @@ module Nightwatch.DBTypes(User(..)
   ,Url(..)
   ,createDownload
   ,createUser
-  ,createOrUpdateUser
+  ,createOrReplaceUser
   ,fetchDownloadByGid
   ,authenticateChat
   ,fetchUserByTelegramUserId
@@ -118,16 +118,24 @@ type NwApp  = SqlPersistT IO
 --type NwApp = ReaderT NwConfig (SqlPersistT IO)
 -- type NwAppWithConfig = ReaderT NwConfig NwApp
 
-createOrUpdateUser :: (MonadIO m) => User -> SqlPersistT m (Entity User)
-createOrUpdateUser userE = do
-  let e = userEmail userE
-  u <- selectFirst [UserEmail ==. e] []
+-- upsertEntity :: (PersistEntity a, PersistField fd) => EntityField a fd -> a -> m (Entity a)
+-- upsertEntity keyCol rcrd = do
+--   let keyVal = keyCol rcrd
+--   r <- selectFirst []
+
+createOrReplaceUser :: (MonadIO m) => String ->
+  (User -> SqlPersistT m User) ->
+  User ->
+  SqlPersistT m (Entity User)
+createOrReplaceUser email replaceFn newUser = do
+  u <- selectFirst [UserEmail ==. email] []
   case u of
-    Just (Entity existingUid _) -> do
-      userWithTimeE <- updateTs userE
-      replace existingUid userWithTimeE
-      return (Entity existingUid userWithTimeE)
-    Nothing -> insertEntity =<< (assignTs userE)
+    Just (Entity existingUid existingUser) -> do
+
+      userWithTime <- updateTs existingUser
+      replace existingUid =<< replaceFn userWithTime
+      return $ (Entity existingUid userWithTime)
+    Nothing -> insertEntity =<< (assignTs newUser)
 
 
 createUser :: Maybe String -> String -> Maybe TgramUserId -> Maybe TgramUsername -> Maybe TgramChatId -> OAuthAccessToken -> OAuthRefreshToken -> NwApp (Entity User)

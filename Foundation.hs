@@ -10,7 +10,7 @@ import Yesod.Core.Types     (Logger)
 import qualified Yesod.Core.Unsafe as Unsafe
 import qualified Data.CaseInsensitive as CI
 import qualified Data.Text.Encoding as TE
-import Control.Lens (makeLensesFor)
+import Control.Lens
 import qualified Nightwatch.Aria2 as A2
 import qualified Nightwatch.Types as NWT
 -- import Yesod.Core (lookupSession)
@@ -160,20 +160,23 @@ instance YesodAuth App where
 
     authenticate creds =  runDB $ do
       let e = credsIdent creds
-      x <- selectFirst [UserEmail ==. (unpack e)] [] 
-      case x of
-        Just (Entity _ userE) -> return $ Authenticated (userEmail userE)
-        Nothing -> case (DL.last $ splitOn "@" e) of
-          "vacationlabs.com" -> do
-            _ <- DB.createOrUpdateUser User{userName=Nothing
-                                           ,userEmail=unpack e
-                                           ,userTgramUserId=Nothing
-                                           ,userTgramUsername=Nothing
-                                           ,userTgramChatId=Nothing
-                                           ,userAccessToken="TODO"
-                                           ,userRefreshToken="TODO"}
-            return $ Authenticated (unpack e)
-          _ -> return $ UserError Yesod.Auth.Message.Email
+      case (DL.last $ splitOn "@" e) of
+        "vacationlabs.com" -> do
+          let name = fmap unpack $ fmap (view _2) $ DL.find (\(k, _) -> k=="displayName") (credsExtra creds)
+          (Entity _ user) <- DB.createOrReplaceUser
+                             (unpack e)
+                             (\user -> return $ if isJust name
+                                                then user{userName=name}
+                                                else user)
+                             User{userName=name
+                                 ,userEmail=unpack e
+                                 ,userTgramUserId=Nothing
+                                 ,userTgramUsername=Nothing
+                                 ,userTgramChatId=Nothing
+                                 ,userAccessToken="TODO"
+                                 ,userRefreshToken="TODO"}
+          return $ Authenticated (userEmail user)
+        _ -> return $ UserError Yesod.Auth.Message.Email
 
     -- You can add other plugins like Google Email, email or OAuth here
     authPlugins foundation = [authGoogleEmail (googleClientId s) (googleClientSecret s)]

@@ -143,13 +143,22 @@ oAuthProcess nwConfig chatId tgramUserId tgramUsername = do
   case (e, d) of
     (Just email, Just "vacationlabs.com") -> do
       -- _ <- createUser n e (Just tgramUserId) tgramUsername (Just chatId) accessToken refreshToken
-      createOrUpdateUser DB.User{DB.userName=n
-                                ,DB.userEmail=email
+      _ <- createOrReplaceUser email
+           -- user replacement function
+           (\user -> return user{DB.userName=n
                                 ,DB.userTgramUserId=Just tgramUserId
                                 ,DB.userTgramUsername=tgramUsername
                                 ,DB.userTgramChatId=Just chatId
                                 ,DB.userAccessToken=accessToken
-                                ,DB.userRefreshToken=refreshToken}
+                                ,DB.userRefreshToken=refreshToken})
+           -- user creation function
+           DB.User{DB.userName=n
+                  ,DB.userEmail=email
+                  ,DB.userTgramUserId=Just tgramUserId
+                  ,DB.userTgramUsername=tgramUsername
+                  ,DB.userTgramChatId=Just chatId
+                  ,DB.userAccessToken=accessToken
+                  ,DB.userRefreshToken=refreshToken}
       liftIO $ sendMsg_ $ "Welcome " ++ email
     (Just email, _) -> liftIO $ sendMsg_ "Sorry, can't let you in. Doesn't look like you authenticated yourself with a VL email ID."
     (Nothing, _) -> liftIO $ sendMsg_ "Whoops! Something's gone wrong. I didn't get access to your email ID after authentication."
