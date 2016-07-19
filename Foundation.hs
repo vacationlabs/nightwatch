@@ -149,7 +149,7 @@ instance YesodPersistRunner App where
     getDBRunner = defaultGetDBRunner appConnPool
 
 instance YesodAuth App where
-    type AuthId App = String
+    type AuthId App = UserId
 
     -- Where to send a user after successful login
     loginDest _ = HomeR
@@ -163,19 +163,19 @@ instance YesodAuth App where
       case (DL.last $ splitOn "@" e) of
         "vacationlabs.com" -> do
           let name = fmap unpack $ fmap (view _2) $ DL.find (\(k, _) -> k=="displayName") (credsExtra creds)
-          (Entity _ user) <- DB.createOrReplaceUser
-                             (unpack e)
-                             (\user -> return $ if isJust name
-                                                then user{userName=name}
-                                                else user)
-                             User{userName=name
-                                 ,userEmail=unpack e
-                                 ,userTgramUserId=Nothing
-                                 ,userTgramUsername=Nothing
-                                 ,userTgramChatId=Nothing
-                                 ,userAccessToken="TODO"
-                                 ,userRefreshToken="TODO"}
-          return $ Authenticated (userEmail user)
+          (Entity uId user) <- DB.createOrReplaceUser
+                               (unpack e)
+                               (\user -> return $ if isJust name
+                                                  then user{userName=name}
+                                                  else user)
+                               User{userName=name
+                                   ,userEmail=unpack e
+                                   ,userTgramUserId=Nothing
+                                   ,userTgramUsername=Nothing
+                                   ,userTgramChatId=Nothing
+                                   ,userAccessToken="TODO"
+                                   ,userRefreshToken="TODO"}
+          return $ Authenticated uId
         _ -> return $ UserError Yesod.Auth.Message.Email
 
     -- You can add other plugins like Google Email, email or OAuth here
@@ -183,14 +183,15 @@ instance YesodAuth App where
       where s = appSettings foundation
 
     -- maybeAuthId = lookupSession "_ID"
+    -- TODO: ensure that the user's login is still valid...
 
     authHttpManager = getHttpManager
 
 instance YesodAuthPersist App where
   type AuthEntity App = User
-  getAuthEntity email = runDB $ do
-    u <- selectFirst [ UserEmail ==. email ] []
-    return $ fmap entityVal u
+  -- getAuthEntity email = runDB $ do
+  --   u <- selectFirst [ UserEmail ==. email ] []
+  --   return $ fmap entityVal u
 
 
 -- This instance is required to use forms. You can modify renderMessage to
@@ -219,10 +220,6 @@ unsafeHandler = Unsafe.fakeHandlerGetLogger appLogger
 
 nav :: Widget
 nav = do
-  maybeUserE <- handlerToWidget $ do
-    maybeUserEmail <- maybeAuthId
-    case maybeUserEmail of
-      Just userEmail -> runDB $ selectFirst [UserEmail ==. userEmail] []
-      Nothing -> return Nothing 
+  maybeUserE <- handlerToWidget maybeAuth
   globalStat  <- liftIO $ A2.getGlobalStat NWT.ariaRPCUrl
   $(whamletFile "templates/navbar.hamlet")
