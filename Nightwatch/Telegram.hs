@@ -1,51 +1,39 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
 module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..)) where
-import Prelude
+
 import           Control.Concurrent
 import qualified Control.Concurrent.Async as A
--- import           Control.Concurrent.Chan
 import           Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 import Control.Lens hiding(from)
-import Data.Aeson.Lens
 import           Control.Monad (forever, guard, liftM, when, zipWithM)
 import           Control.Monad.IO.Class (liftIO, MonadIO)
 import           Data.Aeson
--- import           Data.Aeson.Types
-import qualified Data.ByteString.Lazy as BL
+import           Data.Aeson.Lens
 import qualified Data.ByteString.Char8 as BS (pack, unpack)
--- import qualified Data.ByteString.Lazy.Char8 as BL (pack, unpack)
+import qualified Data.ByteString.Lazy as BL
+import           Data.Char (toUpper)
 import           Data.Functor (void)
--- import           Data.List (isPrefixOf, drop)
--- import qualified Data.Map as M
+import           Data.List (foldl')
 import qualified Data.Text as T
--- import           Data.Text (Text, pack)
--- import qualified Data.Text.IO as T
--- import           Data.Time
--- import           Data.Time.Clock.POSIX
--- import           GHC.Generics (Generic)
-import           Network.Wreq hiding (defaults)
+import           Database.Persist (Key)
+import           Database.Persist.Sql (transactionSave)
+import           Model as DB
 import qualified Network.Wreq as W(defaults)
--- import Network.HTTP.Conduit(HttpException)
--- import           Network.XmlRpc.Client
+import           Network.Wreq hiding (defaults)
+import qualified Nightwatch.Aria2 as A2
 import qualified Nightwatch.DBTypes as DB (message, User(..), authenticateChat, userEmail)
 import           Nightwatch.DBTypes hiding (message, User(..))
-import           Nightwatch.TelegramTypes hiding (accessToken, refreshToken, User(..))
 import           Nightwatch.TelegramTypes as TT
--- import qualified Nightwatch.Types as Ty(message)
+import           Nightwatch.TelegramTypes hiding (accessToken, refreshToken, User(..))
 import           Nightwatch.Types hiding (message)
--- import           System.IO.Error
-import           System.Process (proc, createProcess, getProcessExitCode, ProcessHandle, waitForProcess)
--- import           Text.Read (readMaybe)
-import           Text.Regex.Posix
-import qualified Nightwatch.Aria2 as A2
+import           Prelude
 import           Safe (fromJustNote)
+import           System.Process (proc, createProcess, getProcessExitCode, ProcessHandle, waitForProcess)
 import           Text.Printf
-import           Data.Char (toUpper)
-import           Database.Persist.Sql (transactionSave)
-import           Database.Persist (Key)
-import           Data.List (foldl')
-import Model as DB
+import           Text.Regex.Posix
+import Data.Maybe(isJust)
+import qualified Yesod as Y
 type Resp = Response TelegramResponse
 
 -- botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -356,14 +344,15 @@ onDownloadComplete nwConfig gid = do
   -- a tellStatus call to check what were the results of this download (we're
   -- interested in seeing if it resulted in more downloads being queued)
   (statusResponse, userId, user, dloadId, dload) <- runDb pool $ statusHelper_ gid
+
   let tgramChatId = fromJustNote "Cannot notify user because he/she doesn't have a tgramChatId" $ DB.userTgramChatId user
       (Aria2Gid gidS) = gid
 
   -- Notiy the user that this download has been completed
   sendMessage nwConfig TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
   case (A2.st_followedBy statusResponse) of
-    Nothing -> return ()
-    Just [] -> return ()
+    Nothing -> runDb pool $ void $ downloadPossiblyCompleted (Entity dloadId dload)
+    Just [] -> runDb pool $ void $ downloadPossiblyCompleted (Entity dloadId dload)
     Just gids -> do
 
       -- Now, make tellStatus calls on any downloads that have been created as a
@@ -372,13 +361,38 @@ onDownloadComplete nwConfig gid = do
       statusResponses <- A.mapConcurrently (A2.tellStatus ariaRPCUrl) gids
       newDloadsE <- runDb pool $ mapM (saveDownload userId dloadId (downloadLogId dload)) statusResponses
       sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%s | %d downloads queued" gidS (length newDloadsE))}
-      void $ zipWithM (\sr idx -> sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ printf "%d of %d\n===\n%s" idx (length statusResponses) (humanizeStatusResponse sr))}) statusResponses ([1..]::[Int])
+      void $ zipWithM
+        (\sr idx -> sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId
+                                                   ,DB.message=(TgramMsgText $ printf "%d of %d\n===\n%s" idx (length statusResponses) (humanizeStatusResponse sr))})
+        statusResponses ([1..]::[Int])
     where
       saveDownload :: UserId -> DownloadId -> LogId -> A2.StatusResponse -> NwApp(Entity Download)
       saveDownload userId parentDloadId logId sr = do
         dloadE <- createDownload (A2.st_gid sr) logId userId [] (Just parentDloadId)
         _ <- updateDownloadWithFiles (entityKey dloadE) $ fileHelper_ (A2.st_files sr)
         return dloadE
+
+      downloadPossiblyCompleted :: Entity Download -> NwApp (Entity Download)
+      downloadPossiblyCompleted (Entity dloadId dload) = do
+        r <- hasPendingChildren dload
+        case r of
+          -- We have pending children and need to update status accordingly
+          True -> updateDownload (Entity dloadId (dload & status .~ PendingChildren))
+
+          -- We don't have any more pending children. We can mark the download as complete
+          False -> do
+            dloadE <- updateDownload (Entity dloadId (dload & status .~ Complete))
+            let (Entity dloadId dload) = dloadE
+            transactionSave
+            -- Also, if this download was a child of something else, we need to
+            -- make sure even that is marked as completed
+            case (dload ^. parentId) of
+              Nothing -> return dloadE
+              Just pid -> do
+                parentDload <- Y.get pid
+                if (isJust parentDload)
+                  then downloadPossiblyCompleted (Entity pid (fromJustNote "Parent downlad not found" parentDload))
+                  else return dloadE
 
 onAria2Notification :: NwConfig -> Aria2Gid -> IO ()
 onAria2Notification nwConfig gid = do
