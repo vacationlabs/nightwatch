@@ -40,6 +40,8 @@ module Nightwatch.DBTypes(User(..)
   ,logAria2Notification
   ,updateDownloadWithFiles
   ,getDownloadsByUserId
+  ,hasPendingChildren
+  ,updateDownload
   ,SqlPersistM
   ,NwApp
   ,Entity(..)
@@ -64,7 +66,7 @@ import           Database.Persist.Sqlite
 import           Data.Time (getCurrentTime)
 import           Nightwatch.Types
 import qualified Nightwatch.TelegramTypes as TT
-import           Data.List(unfoldr, partition)
+import           Data.List(unfoldr, partition, foldl')
 import Control.Monad.Reader
 import qualified Data.Text as T
 import Data.Default
@@ -147,9 +149,22 @@ createUser userName userEmail userTgramUserId userTgramUsername userTgramChatId 
 
 createDownload :: Aria2Gid -> LogId -> UserId -> [(String, Integer, [URL])] -> Maybe ParentDownloadId -> NwApp (Entity Download)
 createDownload gid logId_ userId_ files parentId = do
-  dloadE <- insertEntity =<< (assignTs Download{downloadGid=gid, downloadLogId=logId_, downloadUserId=userId_, downloadParentId=parentId})
+  dloadE <- insertEntity =<< (assignTs Download{downloadGid=gid, downloadLogId=logId_, downloadUserId=userId_, downloadParentId=parentId, downloadStatus=Incomplete})
   _ <- updateDownloadWithFiles (entityKey dloadE) files
   return dloadE
+
+updateDownload :: Entity Download -> NwApp(Entity Download)
+updateDownload (Entity dloadId dload) = do
+  d <- updateTs dload
+  replace dloadId d
+  return (Entity dloadId d)
+ 
+hasPendingChildren :: Download -> NwApp (Bool)
+hasPendingChildren dload = do
+  children <- selectList [DownloadParentId ==. (dload ^. parentId)] []
+  case children of
+    [] -> return False
+    children -> return $ foldl' (\memo (Entity _ d) -> memo && (Complete == d ^. status)) True children
 
 updateDownloadWithFiles :: DownloadId -> [(String, Integer, [URL])] -> NwApp([Entity File])
 updateDownloadWithFiles dloadId files = (sequence . (map $ insertFile dloadId)) files

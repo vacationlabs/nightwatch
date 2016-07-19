@@ -9,31 +9,7 @@
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE DeriveGeneric              #-}
  
-module Nightwatch.Types (NightwatchCommand(..)
-  ,TelegramOutgoingMessage(..)
-  ,TelegramOutgoingChannel(..)
-  ,Aria2Gid(..)
-  ,URL(..)
-  ,TgramUsername(..)
-  ,TgramFirstName(..)
-  ,TgramLastName(..)
-  ,TgramUserId(..)
-  ,TgramMsgText(..)
-  ,TgramChatId(..)
-  ,removePrefix
-  ,logAllExceptions
-  ,Aria2RequestId
-  ,nextRequestId
-  ,joinStrings
-  ,Generic
-  ,OAuthRefreshToken
-  ,OAuthAccessToken
-  ,ariaRPCPort
-  ,ariaRPCHost
-  ,ariaRPCUrl
---  ,googleClientId
---  ,googleClientSecret
-  ) where
+module Nightwatch.Types where
 
 import Prelude 
 import qualified Data.Text           as T
@@ -71,6 +47,9 @@ import Data.Foldable(foldl')
 newtype URL = URL String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
 newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
 
+data DownloadStatus = Complete | Incomplete | PendingChildren deriving (Show, Eq, Generic, Read)
+derivePersistField "DownloadStatus"
+
 type Aria2RequestId = String
 type OAuthRefreshToken = String
 type OAuthAccessToken = String
@@ -87,7 +66,7 @@ data NightwatchCommand = InvalidCommand | DownloadCommand URL | PauseCommand Ari
 data TelegramOutgoingMessage = TelegramOutgoingMessage {
   tg_chat_id :: TgramChatId,
   message :: TgramMsgText
-} deriving (Show, Eq)
+  } deriving (Show, Eq)
 
 type TelegramOutgoingChannel = Chan TelegramOutgoingMessage
 

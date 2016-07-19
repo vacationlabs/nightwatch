@@ -29,6 +29,7 @@ Download
   gid Aria2Gid
   logId LogId
   parentId DownloadId Maybe
+  status DownloadStatus
   ~createdAt UTCTime
   ~updatedAt UTCTime
   deriving Show
