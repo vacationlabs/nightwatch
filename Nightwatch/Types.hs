@@ -26,10 +26,11 @@ import qualified Network.Wreq as W(FormValue)
 import Data.List (isPrefixOf, drop)
 import qualified GHC.Stack as Stk
 import Data.Functor (void)
-import Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 import Data.UUID
 import qualified Data.UUID.V1 as UUIDv1
 import Data.Foldable(foldl')
+import Control.Monad.Catch
+import Data.Typeable
 -- -- -- -- import Data.String(IsString)
 
 
@@ -39,16 +40,25 @@ import Data.Foldable(foldl')
 -- googleClientSecret :: T.Text
 -- googleClientSecret = "GcX5OviTB0uMjQHKpEXZaF4A"
 
+data SanityException = DownloadStatusException T.Text
+  deriving (Show, Typeable)
 
-
+instance Exception SanityException
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
 newtype URL = URL String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
 newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
 
-data DownloadStatus = Complete | Incomplete | PendingChildren deriving (Show, Eq, Generic, Read)
+data ChildrenStatus = ChildrenNone | ChildrenComplete | ChildrenIncomplete deriving (Show, Eq, Generic, Read)
+data DownloadStatus = DownloadComplete ChildrenStatus | DownloadIncomplete deriving (Show, Eq, Generic, Read)
 derivePersistField "DownloadStatus"
+derivePersistField "ChildrenStatus"
+
+isDownloadComplete :: DownloadStatus -> Bool
+isDownloadComplete DownloadIncomplete = False
+isDownloadComplete (DownloadComplete _) = True
+
 
 type Aria2RequestId = String
 type OAuthRefreshToken = String
@@ -119,7 +129,7 @@ removePrefix prefix input
   | isPrefixOf prefix input = drop (length prefix) input
   | otherwise = input
 
-logAllExceptions logMarker fn = (void fn) `catch` (\e -> Stk.currentCallStack >>= (\stack -> putStrLn $ logMarker ++ (show (e :: Control.Exception.SomeException)) ++ "\nSTACKTRACE\n" ++ (show stack)))
+logAllExceptions logMarker fn = (void fn) `catch` (\e -> Stk.currentCallStack >>= (\stack -> putStrLn $ logMarker ++ (show (e::SomeException)) ++ "\nSTACKTRACE\n" ++ (show stack)))
 
 -- TODO: This has the potential of going into an infinite loop. Break after
 -- N-tries

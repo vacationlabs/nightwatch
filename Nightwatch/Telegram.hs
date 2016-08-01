@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 module Nightwatch.Telegram (ensureAria2Running, startAria2, startTelegramBot, NightwatchCommand(..)) where
 
 import           Control.Concurrent
 import qualified Control.Concurrent.Async as A
-import           Control.Exception (catch, try, tryJust, bracketOnError, SomeException, Exception)
 import Control.Lens hiding(from)
 import           Control.Monad (forever, guard, liftM, when, zipWithM)
 import           Control.Monad.IO.Class (liftIO, MonadIO)
@@ -34,6 +34,10 @@ import           Text.Printf
 import           Text.Regex.Posix
 import Data.Maybe(isJust)
 import qualified Yesod as Y
+import Data.Traversable(forM, mapM)
+import Control.Monad.Catch
+
+
 type Resp = Response TelegramResponse
 
 -- botToken = "151105940:AAEUZbx4_c9qSbZ5mPN3usjXVwGZzj-JtmI"
@@ -76,7 +80,7 @@ getUpdates nwConfig (Just offset) = do
 sendMessage :: NwConfig -> TelegramOutgoingMessage -> IO ()
 sendMessage nwConfig tgMsg = do
   putStrLn $ "Sending to " ++ (show tgMsg)
-  (void (post ((apiBaseUrl nwConfig) ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (DB.message tgMsg)])) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: Control.Exception.SomeException)))
+  (void (post ((apiBaseUrl nwConfig) ++ "/sendMessage") ["chat_id" := (tg_chat_id tgMsg), "text" := (DB.message tgMsg)])) `catch` (\e -> putStrLn $ "ERROR in sending to " ++ (show $ tg_chat_id tgMsg) ++ ": " ++ (show (e :: SomeException)))
     
 
 -- TODO: There's probably a better way to do this
@@ -343,16 +347,18 @@ onDownloadComplete nwConfig gid = do
   -- First, let's check what this GID was all about, read from the DB, and make
   -- a tellStatus call to check what were the results of this download (we're
   -- interested in seeing if it resulted in more downloads being queued)
-  (statusResponse, userId, user, dloadId, dload) <- runDb pool $ statusHelper_ gid
-
+  (statusResponse, userId, user, dloadId, _) <- runDb pool $  statusHelper_ gid
+  dload <- runDb pool $ markDownloadAsComplete dloadId
+  
   let tgramChatId = fromJustNote "Cannot notify user because he/she doesn't have a tgramChatId" $ DB.userTgramChatId user
       (Aria2Gid gidS) = gid
 
   -- Notiy the user that this download has been completed
   sendMessage nwConfig TelegramOutgoingMessage{tg_chat_id=tgramChatId, DB.message=(TgramMsgText $ humanizeStatusResponse statusResponse)}
+
   case (A2.st_followedBy statusResponse) of
-    Nothing -> runDb pool $ void $ downloadPossiblyCompleted (Entity dloadId dload)
-    Just [] -> runDb pool $ void $ downloadPossiblyCompleted (Entity dloadId dload)
+    Nothing -> return ()
+    Just [] -> return ()
     Just gids -> do
 
       -- Now, make tellStatus calls on any downloads that have been created as a
@@ -365,34 +371,12 @@ onDownloadComplete nwConfig gid = do
         (\sr idx -> sendMsg TelegramOutgoingMessage{tg_chat_id=tgramChatId
                                                    ,DB.message=(TgramMsgText $ printf "%d of %d\n===\n%s" idx (length statusResponses) (humanizeStatusResponse sr))})
         statusResponses ([1..]::[Int])
-    where
-      saveDownload :: UserId -> DownloadId -> LogId -> A2.StatusResponse -> NwApp(Entity Download)
-      saveDownload userId parentDloadId logId sr = do
-        dloadE <- createDownload (A2.st_gid sr) logId userId [] (Just parentDloadId)
-        _ <- updateDownloadWithFiles (entityKey dloadE) $ fileHelper_ (A2.st_files sr)
-        return dloadE
-
-      downloadPossiblyCompleted :: Entity Download -> NwApp (Entity Download)
-      downloadPossiblyCompleted (Entity dloadId dload) = do
-        r <- hasPendingChildren dload
-        case r of
-          -- We have pending children and need to update status accordingly
-          True -> updateDownload (Entity dloadId (dload & status .~ PendingChildren))
-
-          -- We don't have any more pending children. We can mark the download as complete
-          False -> do
-            dloadE <- updateDownload (Entity dloadId (dload & status .~ Complete))
-            let (Entity dloadId dload) = dloadE
-            transactionSave
-            -- Also, if this download was a child of something else, we need to
-            -- make sure even that is marked as completed
-            case (dload ^. parentId) of
-              Nothing -> return dloadE
-              Just pid -> do
-                parentDload <- Y.get pid
-                if (isJust parentDload)
-                  then downloadPossiblyCompleted (Entity pid (fromJustNote "Parent downlad not found" parentDload))
-                  else return dloadE
+  where
+    saveDownload :: UserId -> DownloadId -> LogId -> A2.StatusResponse -> NwApp(Entity Download)
+    saveDownload userId parentDloadId logId sr = do
+      dloadE <- createDownload (A2.st_gid sr) logId userId [] (Just parentDloadId)
+      _ <- updateDownloadWithFiles (entityKey dloadE) $ fileHelper_ (A2.st_files sr)
+      return dloadE
 
 onAria2Notification :: NwConfig -> Aria2Gid -> IO ()
 onAria2Notification nwConfig gid = do
@@ -404,6 +388,7 @@ statusHelper_ gid = do
   statusResponse <- liftIO $ A2.tellStatus ariaRPCUrl gid
   dloadE <- fmap (fromJustNote $ "Could not find GID " ++ (show gid) ++ " in DB") (fetchDownloadByGid gid)
   let dload = entityVal dloadE
+
       dloadId = entityKey dloadE
       userId = (downloadUserId dload)
   user <- fmap (fromJustNote $ "Could not find User ID " ++ (show userId) ++ " in DB") (fetchUserById userId)

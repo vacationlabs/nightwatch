@@ -105,6 +105,7 @@ library
                  , monad-logger
                  , process
                  , regex-posix
+                 , foreign-store
 
 
 executable         Nightwatch
@@ -134,6 +135,10 @@ executable         Nightwatch
                  , regex-posix
                  , text
                  , blaze-markup
+                 , hspec >= 2.0.0
+                 , yesod-test >= 1.5.0.1 && < 1.6
+                 , QuickCheck
+                 , quickcheck-instances
 
     ghc-options:       -threaded -rtsopts -with-rtsopts=-N -O2
 

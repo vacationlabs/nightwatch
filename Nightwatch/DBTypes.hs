@@ -8,6 +8,8 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE LambdaCase            #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 
 module Nightwatch.DBTypes(User(..)
   ,NightwatchCommand(..)
@@ -34,13 +36,14 @@ module Nightwatch.DBTypes(User(..)
   ,fetchLogById
   ,fetchLogByRequestId
   ,updateWithAria2Request
+  ,markDownloadAsComplete
   ,updateWithAria2Response
   ,logIncomingTelegramMessage
   ,updateWithTgramOutgoingMsg
   ,logAria2Notification
   ,updateDownloadWithFiles
   ,getDownloadsByUserId
-  ,hasPendingChildren
+  ,hasIncompleteChildren
   ,updateDownload
   ,SqlPersistM
   ,NwApp
@@ -58,20 +61,24 @@ module Nightwatch.DBTypes(User(..)
   ,NwConfig
   ,def
   ,module Model
+  ,aggregateChildrenStatus
   ) where
  
-import Prelude
+import ClassyPrelude
 import           Database.Persist
 import           Database.Persist.Sqlite
 import           Data.Time (getCurrentTime)
 import           Nightwatch.Types
 import qualified Nightwatch.TelegramTypes as TT
-import           Data.List(unfoldr, partition, foldl')
+import           Data.List(unfoldr, foldl')
 import Control.Monad.Reader
 import qualified Data.Text as T
 import Data.Default
 import Control.Lens
 import Model
+import           Safe (fromJustNote)
+import Data.Maybe (isJust)
+import Debug.Trace
 
 -- import Nightwatch.DBInternal
 
@@ -90,6 +97,8 @@ import Model
 --   assignTimestamps x = getCurrentTime >>= (\time -> x{createdAt=time, updatedAt=time})
 
 type ParentDownloadId = DownloadId
+
+-- data 
 
 -- NOTE: see note above.
 -- instance Timestamped User
@@ -116,7 +125,8 @@ $(makeLenses ''NwConfig)
 instance Default NwConfig where
   def = NwConfig{}
 
-type NwApp  = SqlPersistT IO
+--type NwApp  = SqlPersistT (NoLoggingT (ResourceT IO))
+type NwApp = SqlPersistT IO
 --type NwApp = ReaderT NwConfig (SqlPersistT IO)
 -- type NwAppWithConfig = ReaderT NwConfig NwApp
 
@@ -148,23 +158,95 @@ createUser userName userEmail userTgramUserId userTgramUsername userTgramChatId 
 -- createAria2RequestLog request userId = (liftIO getCurrentTime) >>= (\time -> update logId [ LogAria2Request =. request, LogUserId =. userId ])
 
 createDownload :: Aria2Gid -> LogId -> UserId -> [(String, Integer, [URL])] -> Maybe ParentDownloadId -> NwApp (Entity Download)
-createDownload gid logId_ userId_ files parentId = do
-  dloadE <- insertEntity =<< (assignTs Download{downloadGid=gid, downloadLogId=logId_, downloadUserId=userId_, downloadParentId=parentId, downloadStatus=Incomplete})
-  _ <- updateDownloadWithFiles (entityKey dloadE) files
-  return dloadE
+createDownload gid logId_ userId_ files pid = do
+  pid <- ensureParentIsComplete pid
+  dloadE@(Entity dloadId dload) <- insertEntity =<< (assignTs Download{downloadGid=gid, downloadLogId=logId_, downloadUserId=userId_, downloadParentId=pid, downloadStatus=DownloadIncomplete})
+  _ <- updateDownloadWithFiles dloadId files
+  recomputeDownloadStatus pid
+  return (Entity dloadId dload)
+  where
+    ensureParentIsComplete pid = case pid of
+      Nothing -> return Nothing
+      Just x -> get x >>= \case
+        Nothing -> throwM . DownloadStatusException $ "No such parent exists. ID " ++ (tshow x)
+        Just parent -> if (not $ isDownloadComplete (parent ^. status))
+          then throwM . DownloadStatusException $ "Attempt to create a child for incomplete download ID " ++ (tshow x)
+          else return pid
 
-updateDownload :: Entity Download -> NwApp(Entity Download)
+-- createChildDownload :: Aria2Gid -> LogId -> UserId -> [(String, Integer, [URL])] -> ParentDownloadId -> NwApp (Entity Download, Entity Download)
+-- createChildDownload gid logId_ userId_ files pid = do
+--   pid <- ensureParentIsComplete pid
+--   dloadE@(Entity dloadId dload) <- insertEntity =<< (assignTs Download{downloadGid=gid, downloadLogId=logId_, downloadUserId=userId_, downloadParentId=(Just pid), downloadStatus=DownloadIncomplete})
+--   _ <- updateDownloadWithFiles dloadId files
+--   recomputeDownloadStatus (Just pid)
+--   return (Entity dloadId dload, undefined)
+--   where
+--     ensureParentIsComplete pid = get pid >>= \case
+--         Nothing -> throwM . DownloadStatusException $ "No such parent exists. ID " ++ (tshow pid)
+--         Just parent -> if (not $ isDownloadComplete (parent ^. status))
+--           then throwM . DownloadStatusException $ "Attempt to create a child for incomplete download ID " ++ (tshow pid)
+--           else return pid
+
+
+
+
+markDownloadAsComplete :: DownloadId -> NwApp (Download)
+markDownloadAsComplete dloadId = do
+  cStatus <- aggregateChildrenStatus dloadId
+  dload <- updateGet dloadId [DownloadStatus =. (DownloadComplete cStatus)]
+  recomputeDownloadStatus (dload ^. parentId)
+  transactionSave
+  return dload
+
+
+aggregateChildrenStatus :: DownloadId -> NwApp ChildrenStatus
+aggregateChildrenStatus pid = do
+  (selectList [DownloadParentId ==. (Just pid)] []) >>= \case
+    [] -> return ChildrenNone
+    children -> case (all (\(Entity _ x) -> isDownloadComplete (x ^. status)) children) of
+      -- We have at least one incomplete child. 
+      False -> return ChildrenIncomplete
+      
+      -- All children are compliete
+      True -> return ChildrenComplete
+
+-- changeDownloadStatus :: DownloadId -> DownloadStatus -> NwApp (Download)
+-- changeDownloadStatus dloadId dloadStatus = do
+--   dload <- updateGet dloadId [DownloadStatus =. dloadStatus]
+--   aggregateChildrenStatus (dload ^. parentId)
+--   transactionSave
+--   return dload
+
+traceTap msg val = traceShow (msg ++ ": " ++ (show val)) val
+
+recomputeDownloadStatus :: Maybe DownloadId -> NwApp ()
+recomputeDownloadStatus Nothing = return ()
+recomputeDownloadStatus (Just pid) = do
+  get pid >>= \case
+    Nothing -> return ()
+    Just parent -> do
+      aggregateChildrenStatus pid >>= \case
+        ChildrenNone -> return () 
+        ChildrenIncomplete -> update pid [DownloadStatus =. (DownloadComplete ChildrenIncomplete)]
+        ChildrenComplete -> update pid [DownloadStatus =. (DownloadComplete ChildrenComplete)]
+
+      -- Walk-up the downlaod-tree, if required
+      case (parent ^. parentId) of
+        Nothing -> return ()
+        Just ppid -> recomputeDownloadStatus (Just ppid)
+
+
+updateDownload :: Entity Download -> NwApp(Download)
 updateDownload (Entity dloadId dload) = do
   d <- updateTs dload
   replace dloadId d
-  return (Entity dloadId d)
+  return d
  
-hasPendingChildren :: Download -> NwApp (Bool)
-hasPendingChildren dload = do
-  children <- selectList [DownloadParentId ==. (dload ^. parentId)] []
-  case children of
+hasIncompleteChildren :: DownloadId -> NwApp (Bool)
+hasIncompleteChildren dloadId = do
+  selectList [DownloadParentId ==. (Just dloadId)] [] >>=  \case
     [] -> return False
-    children -> return $ foldl' (\memo (Entity _ d) -> memo && (Complete == d ^. status)) True children
+    children -> return $ any (\(Entity _ x) -> isDownloadComplete (x ^. status)) children
 
 updateDownloadWithFiles :: DownloadId -> [(String, Integer, [URL])] -> NwApp([Entity File])
 updateDownloadWithFiles dloadId files = (sequence . (map $ insertFile dloadId)) files
@@ -243,3 +325,4 @@ getDownloadsByUserId userId = do
 -- loadEfficiently :: (PersistStore backend, PersistEntity parent, PersistEntity child, backend ~ PersistEntityBackend child, MonadIO m) => (parent -> Maybe (Key child)) -> parents -> ReaderT backend m child
 -- loadEfficiently
 
+-- fetchDownloadTrees :: [Filter Download] -> 
