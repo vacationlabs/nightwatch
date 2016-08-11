@@ -106,6 +106,7 @@ library
                  , process
                  , regex-posix
                  , foreign-store
+                 , esqueleto
 
 
 executable         Nightwatch

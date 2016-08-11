@@ -31,6 +31,7 @@ import qualified Data.UUID.V1 as UUIDv1
 import Data.Foldable(foldl')
 import Control.Monad.Catch
 import Data.Typeable
+import Text.Blaze (ToMarkup, toMarkup)
 -- -- -- -- import Data.String(IsString)
 
 
@@ -47,17 +48,29 @@ instance Exception SanityException
 
 -- TODO -- VLUser should be changed to UserId coming from the database
 -- newtype VLUser = VLUser Integer deriving (Show, Eq)
-newtype URL = URL String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
-newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON)
+newtype URL = URL String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON, Ord)
+instance ToMarkup URL where
+  toMarkup (URL u) = toMarkup u
 
-data ChildrenStatus = ChildrenNone | ChildrenComplete | ChildrenIncomplete deriving (Show, Eq, Generic, Read)
-data DownloadStatus = DownloadComplete ChildrenStatus | DownloadIncomplete deriving (Show, Eq, Generic, Read)
+newtype Aria2Gid = Aria2Gid String deriving (Show, Eq, Generic, Read, FromJSON, ToJSON,Ord)
+instance ToMarkup Aria2Gid where
+  toMarkup (Aria2Gid gid) = toMarkup gid
+
+data ChildrenStatus = ChildrenNone | ChildrenComplete | ChildrenIncomplete deriving (Show, Eq, Generic, Read, Ord)
+data DownloadStatus = DownloadComplete ChildrenStatus | DownloadIncomplete deriving (Show, Eq, Generic, Read, Ord)
 derivePersistField "DownloadStatus"
 derivePersistField "ChildrenStatus"
+instance ToMarkup DownloadStatus where
+  toMarkup DownloadIncomplete = "Incomplete"
+  toMarkup (DownloadComplete ChildrenNone) = "Complete"
+  toMarkup (DownloadComplete ChildrenComplete) = "Complete"
+  toMarkup (DownloadComplete ChildrenIncomplete) = "Waiting for children"
 
 isDownloadComplete :: DownloadStatus -> Bool
 isDownloadComplete DownloadIncomplete = False
-isDownloadComplete (DownloadComplete _) = True
+isDownloadComplete (DownloadComplete ChildrenNone) = True
+isDownloadComplete (DownloadComplete ChildrenComplete) = True
+isDownloadComplete (DownloadComplete ChildrenIncomplete) = False
 
 
 type Aria2RequestId = String

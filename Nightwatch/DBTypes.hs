@@ -70,7 +70,7 @@ import           Database.Persist.Sqlite
 import           Data.Time (getCurrentTime)
 import           Nightwatch.Types
 import qualified Nightwatch.TelegramTypes as TT
-import           Data.List(unfoldr, foldl')
+import           Data.List(unfoldr)
 import Control.Monad.Reader
 import qualified Data.Text as T
 import Data.Default
@@ -78,8 +78,11 @@ import Control.Lens
 import Model
 import           Safe (fromJustNote)
 import Data.Maybe (isJust)
-import Debug.Trace
-
+import Data.Tree
+import qualified Database.Esqueleto as E
+import Data.List (mapAccumL)
+import qualified Data.Map.Strict as Map
+import Control.Monad.Logger (runStderrLoggingT)
 -- import Nightwatch.DBInternal
 
 -- NOTE: This cannot be implemented because the accessors are not createdAt
@@ -124,6 +127,10 @@ data NwConfig = NwConfig {
 $(makeLenses ''NwConfig)
 instance Default NwConfig where
   def = NwConfig{}
+
+
+newtype DownloadTree = Tree Download
+type DownloadObject = (Entity Download, [(Entity File, [Entity Url])])
 
 --type NwApp  = SqlPersistT (NoLoggingT (ResourceT IO))
 type NwApp = SqlPersistT IO
@@ -216,8 +223,6 @@ aggregateChildrenStatus pid = do
 --   aggregateChildrenStatus (dload ^. parentId)
 --   transactionSave
 --   return dload
-
-traceTap msg val = traceShow (msg ++ ": " ++ (show val)) val
 
 recomputeDownloadStatus :: Maybe DownloadId -> NwApp ()
 recomputeDownloadStatus Nothing = return ()
@@ -319,10 +324,69 @@ getDownloadsByUserId userId = do
     unfoldrHelper ((dloadE:dloadsE), filesE) = Just ((dloadE, matchingFiles), (dloadsE, nonMatchingFiles))
       where (matchingFiles, nonMatchingFiles) = partitionChildren (entityKey dloadE) filesE
 
-    
-    -- return $ map (\dloadE -> (dloadE, selectList [FileDownloadId ==. (entityKey dloadE)] [Asc FileId])) dloadsE
+-- fetchDownloadTrees :: E.SqlExpr (E.Value Bool) -> [E.SqlExpr E.OrderBy] -> NwApp (Forest DownloadObject)
+-- fetchDownloadTrees whereClause orderClause = do
+--   -- ds <- selectList filters []
+--   tuples <- downloadObjects whereClause orderClause
+--   buildTree $ dloadsToForest tuples
+--   where
 
--- loadEfficiently :: (PersistStore backend, PersistEntity parent, PersistEntity child, backend ~ PersistEntityBackend child, MonadIO m) => (parent -> Maybe (Key child)) -> parents -> ReaderT backend m child
--- loadEfficiently
+--     buildTree :: Forest DownloadObject ->  NwApp (Forest DownloadObject)
+--     buildTree forest = do
+--       let pids = map (Just . entityKey . (view _1) . rootLabel)  forest
+--       children <- downloadObjects (E.where_ (\d -> d E.^. DownloadId E.in_ E.valList pids)) []
+--       let newForest = map
+--                       (\tree@Node{rootLabel=(Entity pid _), subForest=_} ->
+--                          tree{subForest=dloadsToForest $ childrendWithParent pid children})
+--                       forest
 
--- fetchDownloadTrees :: [Filter Download] -> 
+--       mapM
+--         (\tree -> do
+--             newSubForest <- buildTree $ subForest tree
+--             return tree{subForest=newSubForest}
+--         )
+--         newForest
+
+--     dloadsToForest :: [DownloadObject] -> Forest DownloadObject
+--     dloadsToForest dloads = map (\d -> Node{rootLabel=d, subForest=[]}) dloads
+
+--     childrendWithParent :: DownloadId -> [DownloadObject] -> [DownloadObject]
+--     childrendWithParent pid children = filter (\(dloadE, _) -> (entityKey dloadE) == pid) children
+
+
+downloadObjects :: E.SqlExpr (E.Value Bool) -> [E.SqlExpr E.OrderBy] -> NwApp [DownloadObject]
+downloadObjects whereClause orderClause = do
+    result <- E.select $ E.from $
+      \ (dload `E.LeftOuterJoin` file `E.LeftOuterJoin` url) -> do
+        E.on (dload E.^. DownloadId E.==. file E.^. FileDownloadId)
+        E.on (file E.^. FileId E.==. url E.^. UrlFileId)
+        E.where_ whereClause
+        E.orderBy orderClause
+        return (dload, file, url)
+    return $ nestedTuples
+      (\(d, _, _) -> d) -- extract the first-level-group's key from each tuple, i.e. Entity Download
+      (\(_, f, u) -> (f, u)) -- extract the first-level-group's value from each tuple, i.e. (Entity File, Entity Url)
+      (\tpl -> nestedTuples (view _1) (view _2) id tpl) -- Transform the first-level-group's value to a second-level-group
+      result
+
+
+-- dbHarness = runStderrLoggingT $ withSqliteConn "nightwatch.db" $ \conn -> liftIO $ do
+--   flip runSqlConn conn $ do
+--     runMigration migrateAll
+--     downloadObjects (\ d _ _ -> d E.^. DownloadStatus E.==. E.val DownloadIncomplete) (\ _ _ _ -> [])
+
+
+-- groupBy :: ((Entity Download, Entity File, Entity Url) -> (Entity Download))
+--   -> ((Entity Download, Entity File, Entity Url) -> (Entity File, Entity Url))
+--   -> [(Entity Download, Entity File, Entity Url)]
+--   -> [(Entity Download, [(Entity File, Entity Url)])]
+
+-- groupBy :: Ord b => (a -> b) -> (a -> c) -> [a] -> [(b, [c])]
+-- groupBy f g arr = Map.toList $ foldl' (\m kv -> insertWith (++) (f kv) [g kv] m) Map.empty arr
+
+
+nestedTuples :: Ord b => (a -> b) -> (a -> c) -> ([c] -> d) -> [a] -> [(b, d)]
+nestedTuples f g h arr = Map.toList $
+                         Map.map h $
+                         foldl' (\m kv -> insertWith (++) (f kv) [g kv] m) Map.empty arr
+

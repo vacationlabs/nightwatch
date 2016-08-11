@@ -32,17 +32,17 @@ Download
   status DownloadStatus
   ~createdAt UTCTime
   ~updatedAt UTCTime
-  deriving Show
+  deriving Show Eq Ord
 
 File
   downloadId DownloadId
   fpath String
   len Int
-  deriving Show
+  deriving Show Eq Ord
 
 Url
   downloadId DownloadId
   fileId FileId
   url URL
-  deriving Show
+  deriving Show Eq Ord
  -- By default this file is used in Model.hs (which is imported by Foundation.hs)

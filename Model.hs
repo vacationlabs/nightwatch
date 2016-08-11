@@ -34,6 +34,21 @@ $(makeLensesWith abbreviatedFields ''Download)
 $(makeLensesWith abbreviatedFields ''File)
 $(makeLensesWith abbreviatedFields ''Url)
 
+-- genericCompare :: (PersistEntity record) => record -> record -> Ordering
+-- genericCompare (Entity d1 _) (Entity d2 _)
+--   | d1 == d2 = EQ
+--   | d1 < d2 = LT
+--   | d1 > d2 = GT
+
+-- instance {-# OVERLAPPING #-}  Ord (Entity Download) where
+--   compare = genericCompare
+
+-- instance {-# OVERLAPPING #-} Ord (Entity File) where
+--   compare = genericCompare
+
+-- instance {-# OVERLAPPING #-} Ord (Entity Url) where
+--   compare = genericCompare 
+ 
 defWithTs :: (MonadIO m, Default a, HasCreatedAt a UTCTime, HasUpdatedAt a UTCTime) => m a
 defWithTs = do
   time <- liftIO getCurrentTime
