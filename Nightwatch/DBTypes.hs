@@ -62,6 +62,7 @@ module Nightwatch.DBTypes(User(..)
   ,def
   ,module Model
   ,aggregateChildrenStatus
+  ,nestedTuples
   ) where
  
 import ClassyPrelude

@@ -28,6 +28,47 @@ share [mkPersist sqlSettings,
         mkMigrate "migrateAll"]
   $(persistFileWith lowerCaseSettings "config/models")
 
+
+  -- {
+  -- _simpleLenses    = True
+  -- , _generateSigs    = True
+  -- , _generateClasses = True
+  -- , _allowIsos       = False -- generating Isos would hinder "subtyping"
+  -- , _allowUpdates    = True
+  -- , _lazyPatterns    = False
+  -- , _classyLenses    = \n ->
+  --       case nameBase n of
+  --         x:xs -> Just (mkName ("Has" ++ x:xs), mkName (toLower x:xs))
+  --         []   -> Nothing
+  --                                }
+
+-- $(makeClassyFor "HasDownload" "download" [
+--      ("downloadUserId", "userId")
+--      ,("downloadGid", "gid")
+--      ,("downloadLogId", "logId")
+--      ,("downloadParentId", "parentId")
+--      ,("downloadStatus", "status")
+--      ,("downloadCreatedAt", "createdAt")
+--      ,("downloadUpdatedAt", "updatedAt")
+--      ]
+--  ''Download)
+
+-- $(makeClassyFor "HasFile" "file" [
+--      ("fileDownloadId", "downloadId")
+--      ,("fileFpath", "fpath")
+--      ,("fileLen", "len")
+--      ]
+--    ''File
+--  )
+
+-- $(makeClassyFor "HasUrl" "url" [
+--      ("urlDownloadId", "urlDloadId")
+--      ,("urlFileId", "fileId")
+--      ,("urlUrl", "actualUrl")
+--      ]
+--  ''Url
+--  )
+
 $(makeLensesWith abbreviatedFields ''User)
 $(makeLensesWith abbreviatedFields ''Log)
 $(makeLensesWith abbreviatedFields ''Download)
@@ -48,7 +89,8 @@ $(makeLensesWith abbreviatedFields ''Url)
 
 -- instance {-# OVERLAPPING #-} Ord (Entity Url) where
 --   compare = genericCompare 
- 
+
+  
 defWithTs :: (MonadIO m, Default a, HasCreatedAt a UTCTime, HasUpdatedAt a UTCTime) => m a
 defWithTs = do
   time <- liftIO getCurrentTime

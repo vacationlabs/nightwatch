@@ -28,6 +28,7 @@ module Nightwatch.Aria2(
   ) where
 
 import Prelude
+import GHC.Generics (Generic)
 import           Control.Exception
 import           Control.Monad.Catch
 import qualified Data.ByteString.Lazy as BL hiding (pack, unpack)
@@ -261,7 +262,10 @@ encodeJsonRpcRequest method params = fmap encode  (prepareJsonRpcRequest method 
 makeJsonRpcAndExtractResult :: (FromJSON res, ToJSON params, Show res) => Aria2RpcEndpoint -> String -> params -> IO (res)
 makeJsonRpcAndExtractResult rpcEndpoint method params = do
   req <- prepareJsonRpcRequest method params
-  res <- W.post rpcEndpoint (toJSON req)
+  res <- W.postWith
+    (W.defaults L.& W.header "Accept-Encoding" L..~ ["Identity"]) -- Turn off gzip compression, which is turned-on, by default
+    rpcEndpoint
+    (toJSON req)
   resJson <- W.asJSON res
   return $ fromJustNote "Expecting to find a result in the JSON-RPC response" $ result $ resJson L.^. W.responseBody
 

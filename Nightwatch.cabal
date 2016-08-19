@@ -27,6 +27,7 @@ library
                      Nightwatch.Aria2
                      Nightwatch.Telegram
                      Nightwatch.TelegramTypes
+                     JsonTypes
                      
     if flag(dev) || flag(library-only)
         cpp-options:   -DDEVELOPMENT
@@ -89,7 +90,7 @@ library
                  , case-insensitive
                  , wai
                  , async
-                 , lens
+                 , lens                          
                  , time
                  , websockets
                  , wreq
@@ -107,6 +108,9 @@ library
                  , regex-posix
                  , foreign-store
                  , esqueleto
+                 , blaze-markup
+                 , mono-traversable
+                 , semigroups
 
 
 executable         Nightwatch
