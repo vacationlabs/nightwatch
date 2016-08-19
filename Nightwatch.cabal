@@ -60,12 +60,51 @@ executable Nightwatch
   other-extensions:    DeriveGeneric, OverloadedStrings
   
   -- Other library packages from which modules are imported.
-  build-depends:       aeson >=0.10 && <0.11, async, base >=4.8 && <4.9, bytestring >=0.10 && <0.11, containers, haxr >=3000.11 && <3000.12, lens >=4.13 && <4.14, lifted-base, monad-logger >= 0.3.17, network, persistent, persistent-sqlite, persistent-template, process >=1.2 && <1.3, regex-posix >=0.95 && <0.96, resourcet >= 1.1.7, text >=1.2 && <1.3, time >=1.5 && <1.6, transformers, unordered-containers, websockets, wreq >=0.4 && <0.5, yesod >= 1.4, uuid, lens-aeson, mtl >=2.2.1, errors >=2.0.1, exceptions >=0.8, safe >=0.3.9, unix, yesod-auth, http-conduit, aeson-casing, http-types, yesod-core, data-default
-  
+  build-depends:       aeson
+                     , async
+                     , base >=4.8 && <4.9
+                     , bytestring >=0.10 && <0.11
+                     , containers
+                     , haxr >=3000.11 && <3000.12
+                     , lens >=4.13 && <4.14
+                     , lifted-base
+                     , monad-logger >= 0.3.17
+                     , network
+                     , persistent
+                     , persistent-sqlite
+                     , persistent-template
+                     , process >=1.2 && <1.3
+                     , regex-posix >=0.95 && <0.96
+                     , resourcet >= 1.1.7
+                     , text >=1.2 && <1.3
+                     , time >=1.5 && <1.6
+                     , transformers
+                     , unordered-containers
+                     , websockets
+                     , wreq >=0.4 && <0.5
+                     , uuid
+                     , lens-aeson
+                     , mtl >=2.2.1
+                     , errors >=2.0.1
+                     , exceptions >=0.8
+                     , safe >=0.3.9
+                     , unix
+                     , http-conduit
+                     , aeson-casing
+                     , http-types
+                     , data-default
+                     , persistent
+                       
   -- Directories containing source files.
-  -- hs-source-dirs:      
+  hs-source-dirs: ., Nightwatch
   
   -- Base language which the package is written in.
   default-language:    Haskell2010
+
+  other-modules: Nightwatch.Types
+                 Nightwatch.DBTypes
+                 Nightwatch.Aria2
+                 Nightwatch.Telegram
+                 Nightwatch.TelegramTypes
   
   ghc-options: -threaded -O0 -Wall

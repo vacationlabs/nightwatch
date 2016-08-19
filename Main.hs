@@ -2,7 +2,7 @@
 import Nightwatch.Types
 import Nightwatch.DBTypes
 import Nightwatch.Telegram
-import Nightwatch.Webapp
+-- import Nightwatch.Webapp
 -- import Nightwatch.Websocket
 -- import Nightwatch.Aria2
 -- import Control.Concurrent.Async
@@ -39,7 +39,7 @@ main = runStderrLoggingT $ withSqlitePool "nightwatch.db" 5 $ \pool -> liftIO $ 
   -- runMigrations pool
   startAria2 nwConfig
   startTelegramBot nwConfig
-  startWebapp nwConfig
+  --startWebapp nwConfig
 
 -- main = do
 --   a <- async $ startWebsocketClient "localhost" 9999 "/jsonrpc" defaultAria2Callbacks{onDownloadStart=onMessage, onDownloadComplete=onMessage, onDownloadError=onMessage}
